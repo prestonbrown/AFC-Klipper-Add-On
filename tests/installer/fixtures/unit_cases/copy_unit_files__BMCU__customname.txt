@@ -1,0 +1,76 @@
+=== FILES ===
+--- AFC_BMCU_1.cfg ---
+[AFC_BMCU BMCU_1]
+# The BMCU must run BMCU-Klipper firmware (protocol 1). Do not also configure
+# BMCU-Klipper's own [bmcu] section for this board: AFC refuses to start if both
+# use the same serial port.
+serial: /dev/serial/by-id/<replace with your BMCU serial path>
+# Set to True for RS485 wiring (the Micro-Fit pair). RS485 also needs the
+# BMCU-Klipper RS485 firmware build. USB and TTL use False.
+half_duplex: False
+hub: BMCU_1_hub
+extruder: extruder
+#load_speed: 60             # Firmware feed speed in mm/s
+#pull_speed: 60             # Firmware retract speed in mm/s
+#contact_pct: 70            # Buffer % that means filament reached the extruder gears
+#feed_timeout: 30           # Shortest timeout of one feed or retract; longer moves get more
+#path_extra: 100            # mm a feed or pull-back may move beyond afc_bowden_length
+#follow_tolerance: 0.5      # No toolhead sensor: share of the extruder's load the encoder must see
+# Each lane must be calibrated once with the lane empty:
+#   AFC_BMCU_CALIBRATE UNIT=BMCU_1 LANE=<lane>
+
+[AFC_hub BMCU_1_hub]
+# Length of the Bowden tube from the BMCU to the extruder in mm. It bounds the
+# feed: the BMCU stops when the filament reaches the extruder gears.
+afc_bowden_length: 900
+# With no sensor the hub is virtual. When the BMCU shares an extruder with
+# another unit, a real switch on the BMCU's own tube before the merge is
+# recommended: it is the only proof the BMCU filament is clear of the merge.
+switch_pin: virtual
+
+[AFC_lane bmcu1]
+unit: BMCU_1:1
+
+[AFC_lane bmcu2]
+unit: BMCU_1:2
+
+[AFC_lane bmcu3]
+unit: BMCU_1:3
+
+[AFC_lane bmcu4]
+unit: BMCU_1:4
+--- end AFC_BMCU_1.cfg ---
+--- AFC_Hardware.cfg ---
+[force_move]
+enable_force_move: True
+
+[AFC_extruder extruder]
+pin_tool_start: enter_tool_pin
+#pin_tool_end: None
+tool_stn: 72                    # See documentation for details on how to calculate this value. https://www.afcproject.dev/toolhead/calculation.html
+tool_stn_unload: 100            # See documentation for details on how to calculate this value. https://www.afcproject.dev/toolhead/calculation.html
+tool_sensor_after_extruder: 0   # Extra distance to move in mm once pre/post sensors are clear. Useful for when only using post sensor, so this distance can be the amount to move to clear extruder gears
+tool_unload_speed: 25           # Unload speed in mm/s when unloading toolhead. Default is 25mm/s.
+tool_load_speed: 25             # Load speed in mm/s when loading toolhead. Default is 25mm/s.
+
+#[filament_switch_sensor bypass]
+#switch_pin: turtleneck:PB5
+#pause_on_runout: False
+
+#--=================================================================================--#
+######### Tip Cut Servo ###############################################################
+#--=================================================================================--#
+#[servo tool_cut]
+# Pin for the cut pin servo.
+#pin: YOUR_SERVO_PIN_HERE
+# Adjust this value until a '_CUTTER_SERVO POS=out' extends the pin fully without a
+# buzzing sound
+#minimum_pulse_width: 0.00053
+# Adjust this value until a '_CUTTER_SERVO POS=in' retracts the pin fully without a
+# buzzing sound
+#maximum_pulse_width: 0.0023
+# Leave this value at 180
+#maximum_servo_angle: 180
+#   Initial angle (in degrees) to set the servo to. The default is to
+#   not send any signal at startup.
+--- end AFC_Hardware.cfg ---

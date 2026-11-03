@@ -6,6 +6,7 @@ from installer.config_editor.edits import (
     remove_tip_cut_servo_section,
     ensure_prep_section,
     ensure_trailing_newline,
+    read_tool_start_pin,
     replace_text,
     replace_text_in_tree,
     replace_varfile_path,
@@ -171,6 +172,17 @@ class TestSetToolStartPin:
         assert path.read_text() == (
             "[AFC_extruder extruder]\nx: 1\n[other]\npin_tool_start: z\n"
         )
+
+    def test_read_returns_the_value_set_would_replace(self, tmp_path: Path) -> None:
+        path = write(tmp_path, self.TEXT)
+        assert read_tool_start_pin(path) == "buffer"
+        assert read_tool_start_pin(write(tmp_path, "[other]\nx: 1\n")) is None
+
+    def test_none_comments_the_pin_out(self, tmp_path: Path) -> None:
+        path = write(tmp_path, "[AFC_extruder extruder]\npin_tool_start: enter_tool_pin\n")
+        set_tool_start_pin(path, None)
+        assert path.read_text() == (
+            "[AFC_extruder extruder]\n#pin_tool_start:     # no toolhead sensor\n")
 
     def test_the_prefix_match_does_not_need_a_value_or_space(self, tmp_path: Path) -> None:
         path = write(tmp_path, "[AFC_extruder extruder]\npin_tool_start:\n")

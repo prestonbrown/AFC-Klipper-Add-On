@@ -176,8 +176,7 @@ def install_afc(
     if sel.toolhead_sensor == "Sensor":
         set_tool_start_pin(hardware, sel.toolhead_sensor_pin)
     elif sel.toolhead_sensor == "Ramming":
-        ramming_pin = "AMS_extruder" if sel.installation_type == "OpenAMS" else "buffer"
-        set_tool_start_pin(hardware, ramming_pin)
+        set_tool_start_pin(hardware, unit.ramming_pin)
     apply_boxturtle_rename(ctx, sel)
     apply_unit_buffer(ctx, console, prompter, sel, sel.buffer_type)
     ensure_prep_section(ctx.afc_file)

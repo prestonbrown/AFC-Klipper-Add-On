@@ -50,6 +50,8 @@ class UnitType(ABC):
     buffer_selectable: bool = True  # False: the buffer follows the sensor / ramming choice
     ramming_hardware: str = "a TurtleNeck buffer"  # wording for the sensor / ramming option
     ramming_supported: bool = True  # False: always a toolhead sensor, no ramming toggle shown
+    # pin_tool_start written for ramming; None leaves the extruder without a toolhead sensor
+    ramming_pin: Optional[str] = "buffer"
 
     @abstractmethod
     def copy_files(

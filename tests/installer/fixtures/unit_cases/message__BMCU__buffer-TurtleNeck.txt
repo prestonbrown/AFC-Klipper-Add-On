@@ -1,0 +1,14 @@
+=== MESSAGE ===
+
+- AFC Configuration updated with selected options at <WORKDIR>/AFC/AFC.cfg
+
+- AFC-Klipper-Add-On python extensions installed to <WORKDIR>/klipper/klippy/extras/
+
+- Enter your BMCU's serial path in the <WORKDIR>/AFC/AFC_BMCU_1.cfg file, and set half_duplex: True for RS485 wiring.
+
+- The BMCU must run BMCU-Klipper firmware. Calibrate each lane once with AFC_BMCU_CALIBRATE.
+  
+You may now quit the script or return to the main menu.
+
+\033[0;31mIf you would like to add any additional units, please restart the script to ensure the
+current units are loaded correctly.\033[0m

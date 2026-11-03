@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Optional
 
 from installer.config_editor.document import ConfigDocument
 
@@ -61,7 +62,7 @@ def set_value(path: Path, key: str, value: str) -> None:
         doc.save()
 
 
-def set_tool_start_pin(path: Path, value: str) -> None:
+def set_tool_start_pin(path: Path, value: Optional[str]) -> None:
     """
     Set the first `pin_tool_start:` after the `[AFC_extruder extruder]` header.
 
@@ -69,21 +70,49 @@ def set_tool_start_pin(path: Path, value: str) -> None:
     following section is rewritten if the extruder section had none.
 
     :param path: config file to edit
-    :param value: new pin
+    :param value: new pin, or None to comment the option out (no toolhead sensor)
     """
     doc = ConfigDocument.load(path)
+    index = _tool_start_index(doc)
+    if index is None:
+        return
+    if value is None:
+        doc.lines[index] = "#pin_tool_start:     # no toolhead sensor\n"
+    else:
+        doc.lines[index] = f"pin_tool_start: {value}\n"
+    doc.save()
+
+
+def read_tool_start_pin(path: Path) -> Optional[str]:
+    """
+    The ``pin_tool_start:`` value set_tool_start_pin would rewrite.
+
+    :param path: config file to read
+    :return Optional[str]: the value without comment, or None when there is no such line
+    """
+    doc = ConfigDocument.load(path)
+    index = _tool_start_index(doc)
+    if index is None:
+        return None
+    return _body(doc.lines[index])[len(_PIN_PREFIX):].split("#", 1)[0].strip()
+
+
+def _tool_start_index(doc: ConfigDocument) -> Optional[int]:
+    """
+    Index of the first ``pin_tool_start:`` line after the ``[AFC_extruder extruder]``
+    header. The scan never leaves the section on a later header.
+
+    :param doc: loaded config
+    :return Optional[int]: the line index, or None
+    """
     in_section = False
-    changed = False
     for index, line in enumerate(doc.lines):
         body = _body(line)
         if body == _EXTRUDER_HEADER:
             in_section = True
         elif in_section and body.startswith(_PIN_PREFIX):
-            doc.lines[index] = f"pin_tool_start: {value}\n"
-            in_section = False
-            changed = True
-    if changed:
-        doc.save()
+            return index
+    return None
 
 
 def ensure_prep_section(path: Path) -> None:

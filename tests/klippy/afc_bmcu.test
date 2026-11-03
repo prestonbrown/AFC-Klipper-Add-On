@@ -1,0 +1,23 @@
+# AFC_BMCU integration test
+#
+# Loads a config with an AFC_BMCU unit and no BMCU attached. Klippy must start,
+# register the unit and its lanes, and report the unit disconnected.
+#
+# Prerequisites:
+#   - test/dict/stm32h723.dict must exist
+#   - KLIPPER_PATH must point to a Klipper clone with chelper built
+
+DICTIONARY stm32h723.dict
+CONFIG afc_bmcu.cfg
+
+ASSERT TEST="{ printer['AFC_BMCU BMCU_1'].connected == False }"
+ASSERT TEST="{ printer['AFC_BMCU BMCU_1'].lanes == ['bmcu1', 'bmcu2', 'bmcu3', 'bmcu4'] }"
+ASSERT TEST="{ printer['AFC_BMCU BMCU_1'].bmcu_lanes['bmcu3'].channel == 3 }"
+ASSERT TEST="{ printer['AFC_BMCU BMCU_1'].firmware == None }"
+
+# A lane move on a disconnected unit is refused with an AFC error, not a crash.
+LANE_MOVE LANE=bmcu1 DISTANCE=50
+ASSERT TEST="{ printer['AFC'].message.message == 'bmcu1: BMCU BMCU_1 is not connected.' }"
+ASSERT TEST="{ printer['AFC'].message.type == 'error' }"
+AFC_CLEAR_MESSAGE
+ASSERT TEST="{ printer['AFC'].message.message == '' }"

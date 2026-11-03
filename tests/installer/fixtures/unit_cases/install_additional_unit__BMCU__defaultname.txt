@@ -1,0 +1,45 @@
+=== FILES ===
+--- AFC_BMCU_1.cfg ---
+[AFC_BMCU BMCU_1]
+# The BMCU must run BMCU-Klipper firmware (protocol 1). Do not also configure
+# BMCU-Klipper's own [bmcu] section for this board: AFC refuses to start if both
+# use the same serial port.
+serial: /dev/serial/by-id/<replace with your BMCU serial path>
+# Set to True for RS485 wiring (the Micro-Fit pair). RS485 also needs the
+# BMCU-Klipper RS485 firmware build. USB and TTL use False.
+half_duplex: False
+hub: BMCU_1_hub
+extruder: extruder
+#load_speed: 60             # Firmware feed speed in mm/s
+#pull_speed: 60             # Firmware retract speed in mm/s
+#contact_pct: 70            # Buffer % that means filament reached the extruder gears
+#feed_timeout: 30           # Shortest timeout of one feed or retract; longer moves get more
+#path_extra: 100            # mm a feed or pull-back may move beyond afc_bowden_length
+#follow_tolerance: 0.5      # No toolhead sensor: share of the extruder's load the encoder must see
+# Each lane must be calibrated once with the lane empty:
+#   AFC_BMCU_CALIBRATE UNIT=BMCU_1 LANE=<lane>
+
+[AFC_hub BMCU_1_hub]
+# Length of the Bowden tube from the BMCU to the extruder in mm. It bounds the
+# feed: the BMCU stops when the filament reaches the extruder gears.
+afc_bowden_length: 900
+# With no sensor the hub is virtual. When the BMCU shares an extruder with
+# another unit, a real switch on the BMCU's own tube before the merge is
+# recommended: it is the only proof the BMCU filament is clear of the merge.
+switch_pin: virtual
+
+[AFC_lane BMCU_1_lane1]
+unit: BMCU_1:1
+
+[AFC_lane BMCU_1_lane2]
+unit: BMCU_1:2
+
+[AFC_lane BMCU_1_lane3]
+unit: BMCU_1:3
+
+[AFC_lane BMCU_1_lane4]
+unit: BMCU_1:4
+--- end AFC_BMCU_1.cfg ---
+--- AFC_Turtle_1.cfg ---
+placeholder
+--- end AFC_Turtle_1.cfg ---

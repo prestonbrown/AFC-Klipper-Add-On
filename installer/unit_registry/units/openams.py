@@ -23,6 +23,7 @@ class OpenAms(UnitType):
     display_name = "OpenAMS"
     key = "OpenAMS"
     ramming_hardware = "an FPS Board"
+    ramming_pin = "AMS_extruder"
     buffer_selectable = False
     additional_name_prefix = "AMS"
     additional_buffer_supported = True

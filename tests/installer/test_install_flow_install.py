@@ -90,8 +90,8 @@ MESSAGE_CASES = [case for case in all_cases() if case[1] == "message"]
 
 
 class TestReplayOfTheMessageFixtures:
-    def test_all_120_message_fixtures_are_present(self) -> None:
-        assert len(MESSAGE_CASES) == 120
+    def test_all_125_message_fixtures_are_present(self) -> None:
+        assert len(MESSAGE_CASES) == 125
 
     @pytest.mark.parametrize(
         "name, mode, overrides", MESSAGE_CASES, ids=[case[0] for case in MESSAGE_CASES]
@@ -166,6 +166,21 @@ class TestInstallAfcBehavior:
         ctx = self.run(tmp_path, InstallOptions(selection=sel, toggles=toggles(tip_cut_servo=True)))
         template = (REPO_ROOT / "templates" / "AFC_Hardware-AFC.cfg").read_bytes()
         assert (ctx.afc_config_dir / "AFC_Hardware.cfg").read_bytes() == template
+
+    @pytest.mark.parametrize(("itype", "pin_line"), [
+        ("BoxTurtle (4-Lane)", "pin_tool_start: buffer"),
+        ("OpenAMS", "pin_tool_start: AMS_extruder"),
+        ("BMCU", "#pin_tool_start:     # no toolhead sensor"),
+    ])
+    def test_ramming_writes_the_unit_types_tool_start(
+        self, tmp_path: Path, itype: str, pin_line: str
+    ) -> None:
+        sel = UnitSelection(installation_type=itype, toolhead_sensor="Ramming")
+        ctx = self.run(tmp_path, InstallOptions(selection=sel))
+        lines = (ctx.afc_config_dir / "AFC_Hardware.cfg").read_text().splitlines()
+        extruder = lines.index("[AFC_extruder extruder]")
+        pins = [line for line in lines[extruder:] if "pin_tool_start:" in line]
+        assert pins[0] == pin_line
 
     def test_the_options_have_their_documented_defaults(self) -> None:
         options = InstallOptions(selection=UnitSelection())

@@ -19,6 +19,7 @@ UNIT_VARIANTS: dict[str, list[dict[str, str]]] = {
     "NightOwl": [{"nightowl_board_type": b} for b in ["ERB_2.0", "OWLFC_Mini"]],
     "ViViD": [{}],
     "OpenAMS": [{}],
+    "BMCU": [{}],
     "HTLF": [{"htlf_board_type": b} for b in ["ERB", "MMB_1.1", "MMB_1.0"]],
     "Claymore": [{"htlf2_board_type": "AFC_Lite"}],
     "QuattroBox": [
@@ -42,6 +43,7 @@ ADDITIONAL_UNIT_DEFAULT_NAME = {
     "ViViD": "Vivid_1",
     "QuattroBox": "QuattroBox_1",
     "OpenAMS": "AMS_1",
+    "BMCU": "BMCU_1",
     "EMU": "EMU_1",
     "HTLF": "HTLF_1",
     "Claymore": "Claymore_1",

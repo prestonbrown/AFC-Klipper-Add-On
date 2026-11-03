@@ -20,6 +20,7 @@ from tests.installer.unit_rows import additional_rows, install_rows
 
 QUATTRO = "QuattroBox"
 OPENAMS = "OpenAMS"
+BMCU = "BMCU"
 VIVID = "ViViD"
 ACE = "ACE"
 
@@ -438,6 +439,102 @@ class TestAce:
         assert force_additional_buffer_default(ACE) is True
 
 
+class TestBmcu:
+    def test_first_install_copies_the_hardware_and_bmcu_files(
+        self, printer_tree: PrinterTree
+    ) -> None:
+        sel = UnitSelection(installation_type=BMCU, unit_name="Ignored")
+        ctx = install(printer_tree, sel, additional=False)
+        assert files(ctx) == ["AFC_BMCU_1.cfg", "AFC_Hardware.cfg"]
+        assert (ctx.afc_config_dir / "AFC_BMCU_1.cfg").read_bytes() == src(
+            printer_tree, "templates/AFC_BMCU_1.cfg"
+        )
+        assert (ctx.afc_config_dir / "AFC_Hardware.cfg").read_bytes() == src(
+            printer_tree, "templates/AFC_Hardware-AFC.cfg"
+        )
+
+    def test_additional_unit_renames_the_unit_hub_and_lanes(
+        self, printer_tree: PrinterTree
+    ) -> None:
+        sel = UnitSelection(installation_type=BMCU, unit_name="BMCU_2")
+        ctx = install(printer_tree, sel, additional=True)
+        assert files(ctx) == ["AFC_BMCU_2.cfg"]
+        unit_text = text(ctx, "AFC_BMCU_2.cfg")
+        assert "BMCU_1" not in unit_text
+        assert "[AFC_lane bmcu" not in unit_text
+        assert "[AFC_BMCU BMCU_2]" in unit_text
+        assert "[AFC_hub BMCU_2_hub]" in unit_text
+        assert "hub: BMCU_2_hub" in unit_text
+        for lane in range(1, 5):
+            assert f"[AFC_lane BMCU_2_lane{lane}]\nunit: BMCU_2:{lane}\n" in unit_text
+
+    @pytest.mark.parametrize("pin, warned", [("buffer", True), ("PA1", False)])
+    def test_additional_unit_on_a_ramming_extruder_warns(
+        self, printer_tree: PrinterTree, pin: str, warned: bool
+    ) -> None:
+        ctx = make_ctx(printer_tree)
+        ctx.afc_config_dir.mkdir(parents=True, exist_ok=True)
+        (ctx.afc_config_dir / "AFC_Hardware.cfg").write_text(
+            f"[AFC_extruder extruder]\npin_tool_start: {pin}\n")
+        console = RecordingConsole()
+        unit = unit_for(BMCU)
+        assert unit is not None
+        unit.install_additional(ctx, console, ScriptedPrompter([]),
+                                UnitSelection(installation_type=BMCU, unit_name="BMCU_2"))
+        warnings = [text for kind, text in console.messages if kind == "WARNING"]
+        assert warnings == ([
+            "[AFC_extruder extruder] uses pin_tool_start: buffer, which needs an AFC buffer "
+            "the BMCU does not have, so Klipper will not start with BMCU_2 on that extruder. "
+            "Set 'extruder:' in AFC_BMCU_2.cfg to an extruder with a toolhead sensor or with "
+            "no pin_tool_start."] if warned else [])
+
+    def test_has_no_buffer_target(self, printer_tree: PrinterTree) -> None:
+        unit = unit_for(BMCU)
+        assert unit is not None
+        assert unit.buffer_target(make_ctx(printer_tree), UnitSelection(installation_type=BMCU)) \
+            is None
+        assert additional_buffer_supported(BMCU) is False
+
+    def test_rows_message_and_default_name(self, printer_tree: PrinterTree) -> None:
+        ctx = make_ctx(printer_tree)
+        unit = unit_for(BMCU)
+        assert unit is not None
+        sel = UnitSelection(installation_type=BMCU, unit_name="x")
+        assert install_rows(unit, sel) == []
+        assert additional_rows(unit, ctx, sel) == ["BMCU Name : BMCU_1"]
+        unit_file = f"{ctx.afc_config_dir}/AFC_BMCU_1.cfg"
+        assert unit.message(ctx, sel) == (
+            f"\n- Enter your BMCU's serial path in the {unit_file} file, and set "
+            "half_duplex: True for RS485 wiring.\n\n"
+            "- The BMCU must run BMCU-Klipper firmware. Calibrate each lane once with "
+            "AFC_BMCU_CALIBRATE.\n  "
+        )
+
+    @pytest.mark.parametrize("start", ["TurtleNeck", "Unknown", "None"])
+    def test_selecting_it_clears_the_buffer(self, start: str) -> None:
+        unit = unit_for(BMCU)
+        assert unit is not None
+        sel = UnitSelection(installation_type=BMCU, buffer_type=start)
+        unit.on_select(sel)
+        assert sel.buffer_type == "None"
+
+    def test_sensor_choice_keeps_no_buffer(self) -> None:
+        unit = unit_for(BMCU)
+        assert unit is not None
+        sel = UnitSelection(installation_type=BMCU, buffer_type="Unknown",
+                            toolhead_sensor="Sensor")
+        assert unit.after_sensor_change(sel) == "Using toolhead sensor"
+        assert sel.buffer_type == "None"
+
+    def test_ramming_choice_keeps_no_buffer(self) -> None:
+        unit = unit_for(BMCU)
+        assert unit is not None
+        sel = UnitSelection(installation_type=BMCU, buffer_type="TurtleNeck",
+                            toolhead_sensor="Ramming")
+        assert unit.after_sensor_change(sel) == "Using ramming with the BMCU's own buffer"
+        assert sel.buffer_type == "None"
+
+
 class TestVivid:
     def test_first_install_uses_fixed_names_whatever_the_unit_name(
         self, printer_tree: PrinterTree
@@ -505,6 +602,7 @@ class TestMessagesAreInsideTheRecordedInstallMessages:
             ("QuattroBox__qb_board_type-MMB_1.0__qb_motor_type-NEMA_14", QUATTRO, {}),
             ("QuattroBox__qb_board_type-MMB_2.0__qb_motor_type-NEMA_17", QUATTRO, {}),
             ("OpenAMS", OPENAMS, {}),
+            ("BMCU", BMCU, {}),
             ("ViViD", VIVID, {}),
         ],
     )
