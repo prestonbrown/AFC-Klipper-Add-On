@@ -186,6 +186,9 @@ class TestExcludeTypes:
     def test_openams_in_exclude_types(self):
         assert "OpenAMS" in EXCLUDE_TYPES
 
+    def test_bmcu_in_exclude_types(self):
+        assert "BMCU" in EXCLUDE_TYPES
+
 
 # ── AFCLane initialization ────────────────────────────────────────────────────
 # AFCLane.__init__ is tightly coupled to Klipper's runtime; we bypass it with
@@ -944,6 +947,22 @@ class TestHandleLoadRunout:
         lane = self._make()
         lane.handle_load_runout(100.0, True)
         lane.set_loaded.assert_called_once_with()
+
+    def test_bmcu_unit_type_processes_load(self):
+        lane = self._make()
+        lane.unit_obj.type = "BMCU"
+        lane.handle_load_runout(100.0, True)
+        lane.set_loaded.assert_called_once_with()
+
+    def test_bmcu_unit_type_processes_runout(self):
+        lane = self._make()
+        lane.unit_obj.type = "BMCU"
+        lane.unit_obj.check_runout.return_value = True
+        lane.unit_obj.handle_runout.return_value = False
+        lane.handle_load_runout(100.0, False)
+        lane.unit_obj.handle_runout.assert_called_once_with(lane)
+        lane._perform_pause_runout.assert_called_once_with()
+        lane.set_unloaded.assert_not_called()
 
     # -- load_state True: staged spool id stashing --
 
@@ -2219,6 +2238,17 @@ class TestLoadCallback:
         lane.prep_state = False
         lane.unit_obj = MagicMock()
         lane.unit_obj.type = "HTLF"
+        lane.printer = MagicMock()
+        lane.printer.state_message = "Printer is ready"
+        lane.load_callback(100.0, True)
+        assert lane.prep_state is True
+
+    def test_bmcu_sets_prep_state(self):
+        lane = _make_afc_lane()
+        lane._load_state = False
+        lane.prep_state = False
+        lane.unit_obj = MagicMock()
+        lane.unit_obj.type = "BMCU"
         lane.printer = MagicMock()
         lane.printer.state_message = "Printer is ready"
         lane.load_callback(100.0, True)

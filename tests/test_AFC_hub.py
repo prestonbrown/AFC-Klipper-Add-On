@@ -317,6 +317,17 @@ class TestHandleReady:
         hub.lanes = {"lane1": lane}
         hub.handle_ready()  # should not raise, lane is skipped via continue
 
+    def test_virtual_hub_skips_bmcu_lanes(self):
+        # BMCU lanes have no load pin: the unit drives the virtual hub itself.
+        hub = _make_hub(switch_pin="virtual")
+        lane = MagicMock()
+        lane.fullname = "AFC_lane bmcu1"
+        lane.load = None
+        lane.prep = MagicMock()
+        lane.unit_obj.type = "BMCU"
+        hub.lanes = {"bmcu1": lane}
+        hub.handle_ready()  # should not raise, lane is skipped via continue
+
     def test_virtual_hub_no_error_when_prep_is_none(self):
         # Condition is `lane.load is None and lane.prep is not None`. With
         # load missing but prep also None, the second operand alone must be
