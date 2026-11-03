@@ -16,6 +16,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, call
 
+import pytest
+
 from extras.AFC_unit import afcUnit
 
 
@@ -80,12 +82,13 @@ def _make_lane(name="lane1", hub="hub1", extruder="ext1", buffer_name="buf1"):
     return lane
 
 
-def _make_configured_unit(values: dict[str, object]) -> afcUnit:
+def _make_configured_unit(values: dict[str, object], afc=None) -> afcUnit:
     """Build an afcUnit through its real __init__ so config parsing is
     exercised. `values` maps config option -> raw value, mimicking what a
-    user wrote in the `[AFC_BoxTurtle ...]` section."""
+    user wrote in the `[AFC_BoxTurtle ...]` section. `afc` supplies the
+    global AFC.cfg values the unit inherits."""
     from tests.conftest import MockConfig, MockPrinter
-    printer = MockPrinter()
+    printer = MockPrinter(afc=afc)
     config = MockConfig(name="AFC_BoxTurtle Turtle_1", printer=printer, values=values)
     return afcUnit(config)
 
@@ -1372,3 +1375,24 @@ class TestRememberSpoolConfig:
     def test_absent_option_defaults_to_false(self):
         unit = _make_configured_unit({})
         assert unit.remember_spool is False
+
+
+# auto_runout_lane / auto_runout_match_color config parsing
+
+def _afc_with_auto_runout():
+    from tests.conftest import MockAFC
+    afc = MockAFC()
+    afc.auto_runout_lane = True
+    afc.auto_runout_match_color = True
+    return afc
+
+
+@pytest.mark.parametrize("option", ["auto_runout_lane", "auto_runout_match_color"])
+class TestAutoRunoutConfig:
+    def test_inherits_global_value(self, option):
+        unit = _make_configured_unit({}, afc=_afc_with_auto_runout())
+        assert getattr(unit, option) is True
+
+    def test_unit_value_overrides_global(self, option):
+        unit = _make_configured_unit({option: "False"}, afc=_afc_with_auto_runout())
+        assert getattr(unit, option) is False

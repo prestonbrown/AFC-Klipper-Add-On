@@ -817,6 +817,8 @@ class AFCSpool:
         """
         This function handles setting the runout lane (infinite spool) for a specified lane. It retrieves the lane
         specified by the 'LANE' parameter and updates it's the lane to use if filament runs out by un-triggering prep sensor.
+        A lane with no runout lane set pauses on runout, unless `auto_runout_lane` is enabled, in which case AFC picks
+        a compatible lane.
 
         Usage
         -----

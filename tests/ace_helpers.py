@@ -1276,6 +1276,8 @@ class AceAFC:
         self.enable_assist_weight = 500.0
         self.assisted_unload = True
         self.unload_on_runout = False
+        self.auto_runout_lane = False
+        self.auto_runout_match_color = False
         self.td1_when_loaded = False
         self.auto_spool_switch = False
         self.auto_spool_switch_threshold = 25.0

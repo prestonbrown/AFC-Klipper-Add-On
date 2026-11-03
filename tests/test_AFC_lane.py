@@ -12,10 +12,14 @@ Covers:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 import pytest
 
 from extras.AFC_lane import (
+    _filament_key,
+    _tool_number,
+    select_runout_lane,
     SpeedMode,
     AssistActive,
     MoveDirection,
@@ -201,6 +205,7 @@ def _make_afc_lane(fullname="AFC_stepper lane1"):
     lane.afc = MagicMock()
     lane.unit = "Turtle_1"
     lane.unit_obj = MagicMock()
+    lane.unit_obj.auto_runout_lane = False
     lane.hub_obj = None
     lane.buffer_obj = None
     lane.extruder_obj = MagicMock()
@@ -869,6 +874,7 @@ class TestHandleLoadRunout:
         lane.printer.state_message = "Printer is ready"
         lane.unit_obj = MagicMock()
         lane.unit_obj.type = "HTLF"
+        lane.unit_obj.auto_runout_lane = False
         lane._afc_prep_done = True
         lane.set_loaded = MagicMock()
         lane.set_unloaded = MagicMock()
@@ -1111,7 +1117,17 @@ class TestHandleLoadRunout:
         lane.unit_obj.handle_runout = MagicMock(return_value=False)
         lane.runout_lane = "lane2"
         lane.handle_load_runout(100.0, False)
-        lane._perform_infinite_runout.assert_called_once_with()
+        lane._perform_infinite_runout.assert_called_once_with("lane2")
+        lane._perform_pause_runout.assert_not_called()
+
+    def test_check_runout_true_unit_declines_uses_the_resolved_lane(self):
+        lane = self._make()
+        lane.unit_obj.check_runout.return_value = True
+        lane.unit_obj.handle_runout = MagicMock(return_value=False)
+        lane.runout_lane = None
+        lane._resolve_runout_lane = MagicMock(return_value="lane4")
+        lane.handle_load_runout(100.0, False)
+        lane._perform_infinite_runout.assert_called_once_with("lane4")
         lane._perform_pause_runout.assert_not_called()
 
     def test_check_runout_true_unit_declines_and_no_runout_lane_uses_pause(self):
@@ -1125,8 +1141,10 @@ class TestHandleLoadRunout:
 
     def test_check_runout_true_no_handle_runout_hook_treated_as_undeclined(self):
         lane = self._make()
-        lane.unit_obj = MagicMock(spec=["type", "on_filament_remove", "check_runout"])
+        lane.unit_obj = MagicMock(spec=["type", "on_filament_remove", "check_runout",
+                                        "auto_runout_lane"])
         lane.unit_obj.type = "HTLF"
+        lane.unit_obj.auto_runout_lane = False
         lane.unit_obj.check_runout.return_value = True
         lane.runout_lane = None
         lane.handle_load_runout(100.0, False)
@@ -1323,7 +1341,17 @@ class TestHandlePrepRunout:
         lane._load_state = True
         lane.runout_lane = "lane3"
         lane.handle_prep_runout(100.0, False)
-        lane._perform_infinite_runout.assert_called_once_with()
+        lane._perform_infinite_runout.assert_called_once_with("lane3")
+
+    def test_mid_print_prep_runout_uses_the_resolved_lane(self):
+        lane = self._make()
+        lane.afc.current = "lane1"
+        lane.afc.function.is_printing = MagicMock(return_value=True)
+        lane._load_state = True
+        lane.runout_lane = None
+        lane._resolve_runout_lane = MagicMock(return_value="lane4")
+        lane.handle_prep_runout(100.0, False)
+        lane._perform_infinite_runout.assert_called_once_with("lane4")
 
     # -- deferred recheck (Jimmy's review on PR #827: an edge silently dropped by
     # the guard could leave a lane's internal status stale forever -- e.g. eject
@@ -2508,7 +2536,14 @@ class TestHandleAutoSpoolSwitch:
     def test_calls_infinite_runout_when_runout_lane_set(self):
         lane = _make_lane_for_auto_switch(runout_lane="lane2")
         lane._handle_auto_spool_switch()
-        lane._perform_infinite_runout.assert_called_once()
+        lane._perform_infinite_runout.assert_called_once_with("lane2")
+        lane._perform_pause_runout.assert_not_called()
+
+    def test_calls_infinite_runout_with_the_resolved_lane(self):
+        lane = _make_lane_for_auto_switch(runout_lane=None)
+        lane._resolve_runout_lane = MagicMock(return_value="lane4")
+        lane._handle_auto_spool_switch()
+        lane._perform_infinite_runout.assert_called_once_with("lane4")
         lane._perform_pause_runout.assert_not_called()
 
     def test_calls_pause_runout_when_no_runout_lane(self):
@@ -3112,7 +3147,7 @@ class TestHandleToolheadRunout:
         lane.handle_toolhead_runout(sensor="tool_start")
         lane.afc.error.pause_resume.send_pause_command.assert_not_called()
         lane._perform_pause_runout.assert_not_called()
-        lane._perform_infinite_runout.assert_called_once()
+        lane._perform_infinite_runout.assert_called_once_with("lane1")
 
 class TestSetToolLoaded:
     def test_not_normal_toolchange(self):
@@ -3157,7 +3192,7 @@ class TestPerformInfiniteRunout:
         lane.afc = afc
 
 
-        lane._perform_infinite_runout()
+        lane._perform_infinite_runout(lane.runout_lane)
         info_msgs = [m for lvl, m in lane.logger.messages if lvl == "info"]
 
         assert lane.status is AFCLaneState.NONE
@@ -3175,7 +3210,7 @@ class TestPerformInfiniteRunout:
         afc.current = lane.name
         afc.lanes.get.side_effect = [lane, None]
 
-        lane._perform_infinite_runout()
+        lane._perform_infinite_runout(lane.runout_lane)
 
         afc.lanes.get.assert_any_call(afc.current)
         afc.lanes.get.assert_any_call(None)
@@ -3192,7 +3227,7 @@ class TestPerformInfiniteRunout:
         afc.current = lane.name
         afc.lanes.get.side_effect = [lane, None]
 
-        lane._perform_infinite_runout()
+        lane._perform_infinite_runout(lane.runout_lane)
 
         afc.lanes.get.assert_any_call(afc.current)
         afc.lanes.get.assert_any_call(lane2.name)
@@ -3209,7 +3244,7 @@ class TestPerformInfiniteRunout:
         afc.current = lane.name
         afc.lanes.get.side_effect = [lane, lane2]
 
-        lane._perform_infinite_runout()
+        lane._perform_infinite_runout(lane.runout_lane)
 
         afc.lanes.get.assert_any_call(afc.current)
         afc.lanes.get.assert_any_call(lane2.name)
@@ -3226,7 +3261,7 @@ class TestPerformInfiniteRunout:
         afc.current = lane.name
         afc.lanes.get.side_effect = [lane, lane2]
 
-        lane._perform_infinite_runout()
+        lane._perform_infinite_runout(lane.runout_lane)
 
         afc.error.pause_resume.send_pause_command.assert_called_once()
         afc.save_pos.assert_called_once()
@@ -3246,7 +3281,7 @@ class TestPerformInfiniteRunout:
         afc.current = lane.name
         afc.lanes.get.side_effect = [lane, lane2]
 
-        lane._perform_infinite_runout()
+        lane._perform_infinite_runout(lane.runout_lane)
 
         lane.extruder_obj.set_print_leds.assert_called_with(0, quiet=True)
         lane2.extruder_obj.set_print_leds.assert_called_with(1, quiet=True)
@@ -3263,7 +3298,7 @@ class TestPerformInfiniteRunout:
         afc.current = lane.name
         afc.lanes.get.side_effect = [lane, lane2]
 
-        lane._perform_infinite_runout()
+        lane._perform_infinite_runout(lane.runout_lane)
 
         lane.extruder_obj.set_print_leds.assert_not_called()
     
@@ -3283,13 +3318,305 @@ class TestPerformInfiniteRunout:
             change_tool_side_effect(afc)
         )
 
-        lane._perform_infinite_runout()
+        lane._perform_infinite_runout(lane.runout_lane)
 
         afc.lanes.get.assert_any_call(afc.current)
         afc.lanes.get.assert_any_call(lane2.name)
         assert afc.lanes.get.call_count == 2
         assert lane2.status is AFCLaneState.INFINITE_RUNOUT
         lane.gcode.run_script_from_command.assert_not_called()
+
+    def test_switches_to_passed_lane_without_runout_lane_attribute(self):
+        afc = MockAFC()
+        afc.lanes = MagicMock(spec=dict)
+        lane = _make_afc_lane()
+        lane2 = _make_afc_lane("AFC_stepper lane2")
+        lane.afc = afc
+        lane.runout_lane = None
+        afc.current = lane.name
+        afc.lanes.get.side_effect = [lane, lane2]
+
+        lane._perform_infinite_runout("lane2")
+
+        afc.lanes.get.assert_called_with("lane2")
+        afc.CHANGE_TOOL.assert_called_with(lane2, restore_pos=False)
+
+
+# Compatible runout lane selection
+
+_EXTRUDER = SimpleNamespace(name="extruder")
+
+
+def _runout_candidate(name, unit="Turtle_1", extruder=_EXTRUDER, status=AFCLaneState.LOADED,
+                      prep_state=True, load_state=True, material="PLA", color="#FF0000",
+                      lane_map=None, spool_id=1):
+    """Lane stand-in carrying only what select_runout_lane reads."""
+    return SimpleNamespace(name=name, unit=unit, extruder_obj=extruder, status=status,
+                           prep_state=prep_state, load_state=load_state, material=material,
+                           color=color, map=lane_map if lane_map is not None else ["T9"],
+                           spool_id=spool_id)
+
+
+def test_filament_key_of_none_is_empty():
+    assert _filament_key(None) == ""
+
+
+@pytest.mark.parametrize("map_cmd, expected", [("T12", 12), ("t3", 3), ("TX", None),
+                                               ("13", None)])
+def test_tool_number(map_cmd, expected):
+    assert _tool_number(map_cmd) == expected
+
+
+class TestSelectRunoutLane:
+    def test_default_label_without_spool_data_rejected(self):
+        empty = _runout_candidate("lane1")
+        lane2 = _runout_candidate("lane2", material="pla", spool_id=None)
+        assert (select_runout_lane(empty, [lane2], False, None, "PLA")
+                == (None, [("lane2", "material 'pla' is the default label, not spool data")]))
+
+    def test_default_material_with_spool_data_matches(self):
+        empty = _runout_candidate("lane1")
+        lane2 = _runout_candidate("lane2", spool_id=12)
+        assert select_runout_lane(empty, [lane2], False, None, "PLA") == (lane2, [])
+
+    def test_picks_ready_lane_with_same_material(self):
+        empty = _runout_candidate("lane1", status=AFCLaneState.TOOLED)
+        lane2 = _runout_candidate("lane2")
+        assert select_runout_lane(empty, [empty, lane2], False, None) == (lane2, [])
+
+    def test_never_picks_the_running_out_lane(self):
+        empty = _runout_candidate("lane1")
+        assert select_runout_lane(empty, [empty], False, None) == (None, [])
+
+    @pytest.mark.parametrize("not_ready", [{"status": AFCLaneState.ERROR},
+                                           {"prep_state": False},
+                                           {"load_state": False}])
+    def test_lane_not_ready_rejected(self, not_ready):
+        empty = _runout_candidate("lane1")
+        lane2 = _runout_candidate("lane2", **not_ready)
+        assert select_runout_lane(empty, [lane2], False, None) == (None, [("lane2", "not ready")])
+
+    def test_lane_on_other_extruder_rejected(self):
+        empty = _runout_candidate("lane1")
+        lane2 = _runout_candidate("lane2", extruder=SimpleNamespace(name="extruder1"))
+        assert (select_runout_lane(empty, [lane2], False, None)
+                == (None, [("lane2", "feeds extruder1")]))
+
+    def test_material_mismatch_rejected(self):
+        empty = _runout_candidate("lane1")
+        lane2 = _runout_candidate("lane2", material="PETG")
+        assert (select_runout_lane(empty, [lane2], False, None)
+                == (None, [("lane2", "material 'PETG' does not match 'PLA'")]))
+
+    def test_material_compared_without_case_or_whitespace(self):
+        empty = _runout_candidate("lane1", material="PLA")
+        lane2 = _runout_candidate("lane2", material=" pla ")
+        assert select_runout_lane(empty, [lane2], False, None) == (lane2, [])
+
+    def test_unknown_material_never_matches(self):
+        empty = _runout_candidate("lane1", material="")
+        lane2 = _runout_candidate("lane2", material="")
+        assert (select_runout_lane(empty, [lane2], False, None)
+                == (None, [("lane2", "material '' does not match ''")]))
+
+    def test_color_ignored_without_match_color(self):
+        empty = _runout_candidate("lane1", color="#FF0000")
+        lane2 = _runout_candidate("lane2", color="#0000FF")
+        assert select_runout_lane(empty, [lane2], False, None) == (lane2, [])
+
+    def test_color_mismatch_rejected_with_match_color(self):
+        empty = _runout_candidate("lane1", color="#FF0000")
+        lane2 = _runout_candidate("lane2", color="#0000FF")
+        assert (select_runout_lane(empty, [lane2], True, None)
+                == (None, [("lane2", "color '#0000FF' does not match '#FF0000'")]))
+
+    def test_color_compared_without_hash_or_case(self):
+        empty = _runout_candidate("lane1", color="#ff0000")
+        lane2 = _runout_candidate("lane2", color="FF0000")
+        assert select_runout_lane(empty, [lane2], True, None) == (lane2, [])
+
+    def test_unknown_color_never_matches_with_match_color(self):
+        empty = _runout_candidate("lane1", color="")
+        lane2 = _runout_candidate("lane2", color="")
+        assert (select_runout_lane(empty, [lane2], True, None)
+                == (None, [("lane2", "color '' does not match ''")]))
+
+    def test_lane_mapped_to_tool_the_print_uses_rejected(self):
+        empty = _runout_candidate("lane1", lane_map=["T0"])
+        lane2 = _runout_candidate("lane2", lane_map=["T1", "T4"])
+        assert (select_runout_lane(empty, [lane2], False, [0, 4])
+                == (None, [("lane2", "mapped to T4 used by this print")]))
+
+    def test_lane_mapped_to_unused_tool_accepted(self):
+        empty = _runout_candidate("lane1", lane_map=["T0"])
+        lane2 = _runout_candidate("lane2", lane_map=["T1"])
+        assert select_runout_lane(empty, [lane2], False, [0]) == (lane2, [])
+
+    def test_unknown_print_tools_exclude_no_mapping(self):
+        empty = _runout_candidate("lane1", lane_map=["T0"])
+        lane2 = _runout_candidate("lane2", lane_map=["T0"])
+        assert select_runout_lane(empty, [lane2], False, None) == (lane2, [])
+
+    def test_continues_past_rejected_lane(self):
+        empty = _runout_candidate("lane1")
+        lane2 = _runout_candidate("lane2", load_state=False)
+        lane3 = _runout_candidate("lane3")
+        assert (select_runout_lane(empty, [lane2, lane3], False, None)
+                == (lane3, [("lane2", "not ready")]))
+
+    def test_same_unit_preferred_over_earlier_unit(self):
+        empty = _runout_candidate("lane5", unit="Turtle_2")
+        other_unit = _runout_candidate("lane1", unit="Turtle_1")
+        same_unit = _runout_candidate("lane8", unit="Turtle_2")
+        assert select_runout_lane(empty, [other_unit, same_unit], False, None) == (same_unit, [])
+
+    def test_lanes_in_natural_order_within_unit(self):
+        empty = _runout_candidate("lane1")
+        lane10 = _runout_candidate("lane10")
+        lane2 = _runout_candidate("lane2")
+        assert select_runout_lane(empty, [lane10, lane2], False, None) == (lane2, [])
+
+    def test_other_units_in_natural_order(self):
+        empty = _runout_candidate("lane1", unit="Turtle_1")
+        unit10 = _runout_candidate("lane3", unit="Turtle_10")
+        unit2 = _runout_candidate("lane9", unit="Turtle_2")
+        assert select_runout_lane(empty, [unit10, unit2], False, None) == (unit2, [])
+
+
+def _make_lane_for_resolve(runout_lane=None, auto=True, match_color=False):
+    """Real AFCLane with a unit carrying the auto runout settings."""
+    lane = _make_real_afc_lane("lane1")
+    lane.unit_obj = MagicMock()
+    lane.unit_obj.auto_runout_lane = auto
+    lane.unit_obj.auto_runout_match_color = match_color
+    lane.runout_lane = runout_lane
+    lane.afc.lanes = {"lane1": lane}
+    lane.afc.current = "lane1"
+    lane.afc.default_material_type = None
+    return lane
+
+
+class TestResolveRunoutLane:
+    def test_lane_not_in_the_toolhead_chooses_nothing(self):
+        lane = _make_lane_for_resolve()
+        lane.afc.current = "lane2"
+        with patch("extras.AFC_lane.select_runout_lane") as select:
+            assert lane._resolve_runout_lane() is None
+        select.assert_not_called()
+        assert lane.logger.messages == [
+            ("info", "lane1 ran out but is not the lane in the toolhead, no runout lane chosen "
+                     "automatically")]
+
+    def test_running_out_lane_with_a_default_label_chooses_nothing(self):
+        lane = _make_lane_for_resolve()
+        lane.afc.default_material_type = "PLA"
+        lane._material = "PLA"
+        lane.spool_id = None
+        with patch("extras.AFC_lane.select_runout_lane") as select:
+            assert lane._resolve_runout_lane() is None
+        select.assert_not_called()
+        assert lane.logger.messages == [
+            ("info", "No runout lane set for lane1 and its material 'PLA' is the default "
+                     "label, not spool data, so no lane is chosen automatically")]
+
+    def test_default_material_is_passed_to_the_selection(self):
+        lane = _make_lane_for_resolve()
+        lane.afc.default_material_type = "PETG"
+        lane.afc.print_data_metadata = SimpleNamespace(referenced_tools=[])
+        with patch("extras.AFC_lane.select_runout_lane", return_value=(None, [])) as select:
+            lane._resolve_runout_lane()
+        assert select.call_args.args[4] == "PETG"
+
+    def test_explicit_runout_lane_wins(self):
+        lane = _make_lane_for_resolve(runout_lane="lane3")
+        with patch("extras.AFC_lane.select_runout_lane") as select:
+            assert lane._resolve_runout_lane() == "lane3"
+        select.assert_not_called()
+        assert lane.logger.messages == []
+
+    def test_disabled_without_runout_lane_returns_none(self):
+        lane = _make_lane_for_resolve(auto=False)
+        with patch("extras.AFC_lane.select_runout_lane") as select:
+            assert lane._resolve_runout_lane() is None
+        select.assert_not_called()
+        assert lane.logger.messages == []
+
+    def test_auto_selected_same_unit_lane_logged(self):
+        lane = _make_lane_for_resolve()
+        lane.afc.print_data_metadata = SimpleNamespace(referenced_tools=[0])
+        chosen = SimpleNamespace(name="lane2", unit="Turtle_1", material="PLA", color="#FF0000")
+        lane.afc.lanes["lane2"] = chosen
+        with patch("extras.AFC_lane.select_runout_lane", return_value=(chosen, [])) as select:
+            assert lane._resolve_runout_lane() == "lane2"
+        lane_arg, lanes_arg, match_color_arg, tools_arg, _ = select.call_args.args
+        assert (lane_arg, list(lanes_arg)) == (lane, [lane, chosen])
+        assert (match_color_arg, tools_arg) == (False, [0])
+        assert lane.logger.messages == [
+            ("info", "No runout lane set for lane1, auto selected lane2 "
+                     "(material PLA, color #FF0000, unit Turtle_1)")
+        ]
+
+    def test_match_color_is_passed_to_the_selection(self):
+        lane = _make_lane_for_resolve(match_color=True)
+        lane.afc.print_data_metadata = SimpleNamespace(referenced_tools=[])
+        chosen = SimpleNamespace(name="lane6", unit="Turtle_2", material="PETG", color="#00FF00")
+        with patch("extras.AFC_lane.select_runout_lane", return_value=(chosen, [])) as select:
+            assert lane._resolve_runout_lane() == "lane6"
+        assert select.call_args.args[2:4] == (True, [])
+
+    def test_without_print_metadata_notes_unchecked_mapping(self):
+        lane = _make_lane_for_resolve()
+        lane.afc.print_data_metadata = None
+        chosen = SimpleNamespace(name="lane2", unit="Turtle_1", material="PLA", color="")
+        with patch("extras.AFC_lane.select_runout_lane", return_value=(chosen, [])) as select:
+            assert lane._resolve_runout_lane() == "lane2"
+        assert select.call_args.args[3] is None
+        assert lane.logger.messages == [
+            ("info", "No runout lane set for lane1, auto selected lane2 "
+                     "(material PLA, color none, unit Turtle_1)"),
+            ("warning", "Tools used by this print are unknown, lanes mapped to other tools were "
+                        "not excluded"),
+        ]
+
+    def test_no_compatible_lane_logs_each_rejection(self):
+        lane = _make_lane_for_resolve()
+        rejected = [("lane2", "not ready"), ("lane3", "material PETG does not match")]
+        with patch("extras.AFC_lane.select_runout_lane", return_value=(None, rejected)):
+            assert lane._resolve_runout_lane() is None
+        assert lane.logger.messages == [
+            ("info", "No runout lane set for lane1 and no compatible lane found. Checked: "
+                     "lane2 (not ready), lane3 (material PETG does not match)")
+        ]
+
+    def test_no_other_lanes_logged(self):
+        lane = _make_lane_for_resolve()
+        with patch("extras.AFC_lane.select_runout_lane", return_value=(None, [])):
+            assert lane._resolve_runout_lane() is None
+        assert lane.logger.messages == [
+            ("info", "No runout lane set for lane1 and no compatible lane found. Checked: "
+                     "no other lanes")
+        ]
+
+
+class TestPerformRunout:
+    def _make(self, resolved):
+        lane = _make_real_afc_lane("lane1")
+        lane._resolve_runout_lane = MagicMock(return_value=resolved)
+        lane._perform_infinite_runout = MagicMock()
+        lane._perform_pause_runout = MagicMock()
+        return lane
+
+    def test_switches_to_resolved_lane(self):
+        lane = self._make("lane2")
+        lane._perform_runout()
+        lane._perform_infinite_runout.assert_called_once_with("lane2")
+        lane._perform_pause_runout.assert_not_called()
+
+    def test_pauses_without_resolved_lane(self):
+        lane = self._make(None)
+        lane._perform_runout()
+        lane._perform_pause_runout.assert_called_once_with()
+        lane._perform_infinite_runout.assert_not_called()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

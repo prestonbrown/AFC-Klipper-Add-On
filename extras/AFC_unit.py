@@ -138,6 +138,13 @@ class afcUnit:
         self.assisted_unload    = config.getboolean("assisted_unload", self.afc.assisted_unload)
         # When True AFC will unload lane and then pause when runout is triggered and spool to swap to is not set(infinite spool). Setting value here overrides values set in AFC.cfg file
         self.unload_on_runout   = config.getboolean("unload_on_runout", self.afc.unload_on_runout)
+        # Picks a compatible lane for infinite spool when a lane has no runout lane set. Setting
+        # value here overrides values set in AFC.cfg file
+        self.auto_runout_lane   = config.getboolean("auto_runout_lane", self.afc.auto_runout_lane)
+        # Requires the auto picked lane to match color as well. Setting value here overrides values
+        # set in AFC.cfg file
+        self.auto_runout_match_color = config.getboolean("auto_runout_match_color",
+                                                         self.afc.auto_runout_match_color)
 
         # TD-1 variables
         self.td1_when_loaded    = config.getboolean("capture_td1_when_loaded", self.afc.td1_when_loaded)

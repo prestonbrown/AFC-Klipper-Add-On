@@ -580,6 +580,9 @@ class MockAFC:
         self.enable_assist_weight = 500.0
         self.assisted_unload = True
         self.unload_on_runout = False
+        self.auto_runout_lane = False
+        self.auto_runout_match_color = False
+        self.print_data_metadata = None
         self.td1_when_loaded = False
         self.home_to_tool = True
         self.homing_enabled = True

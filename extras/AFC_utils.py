@@ -1132,6 +1132,17 @@ class AFC_PrintFileMetaData:
                 temperature_list = self._metadata.get("nozzle_temp", [])
         return temperature_list
 
+    @property
+    def referenced_tools(self) -> Optional[List[int]]:
+        """
+        :return Optional[List[int]]: Tool numbers the file uses from `referenced_tools` in cached
+                                     metadata, None when the slicer did not provide it
+        """
+        tools = self._metadata.get("referenced_tools")
+        if not isinstance(tools, list):
+            return None
+        return tools
+
     def reset(self) -> None:
         """
         Clears cached filename and metadata, used when a print ends/is reset so

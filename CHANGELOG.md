@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11-02-2026]
+### Added
+- Added opt-in `auto_runout_lane` setting (AFC.cfg, overridable per unit). When a lane runs out with no runout lane set, infinite spool switches to a loaded and ready lane on the same extruder with the same material instead of pausing, preferring lanes in the same unit. Lanes mapped to a tool the print uses are skipped when the file's metadata lists `referenced_tools`. Only a runout of the lane in the toolhead triggers it, and a lane labeled with `default_material_type` but no spool data never matches. Set `auto_runout_match_color` to also require a matching color. A runout lane set with `SET_RUNOUT` always takes priority, and AFC still pauses when no lane qualifies.
+
 ## [11-01-2026]
 ### Added
 - Added ability to choose extruder when first installing AFC and when adding additional units on a multi-toolhead system

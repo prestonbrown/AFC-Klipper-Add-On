@@ -1288,6 +1288,25 @@ class TestAFCPrintFileMetaDataToolTemperatures:
         meta.query_filename("test.gcode")
         assert meta.tool_temperatures == []
 
+class TestAFCPrintFileMetaDataReferencedTools:
+    def test_referenced_tools_from_metadata(self):
+        meta, moonraker = _make_print_file_metadata()
+        _stub_get_file_metadata(moonraker, {"referenced_tools": [0, 2]})
+        meta.query_filename("test.gcode")
+        assert meta.referenced_tools == [0, 2]
+
+    def test_referenced_tools_none_when_key_missing(self):
+        meta, moonraker = _make_print_file_metadata()
+        _stub_get_file_metadata(moonraker, {"filament_temps": [200]})
+        meta.query_filename("test.gcode")
+        assert meta.referenced_tools is None
+
+    def test_referenced_tools_none_when_not_a_list(self):
+        meta, moonraker = _make_print_file_metadata()
+        _stub_get_file_metadata(moonraker, {"referenced_tools": "0,2"})
+        meta.query_filename("test.gcode")
+        assert meta.referenced_tools is None
+
 class TestAFCPrintFileMetaDataReset:
     def test_reset_clears_filename_and_metadata(self):
         meta, moonraker = _make_print_file_metadata()

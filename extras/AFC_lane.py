@@ -14,7 +14,7 @@ from datetime import datetime
 from enum import Enum
 from gcode import CommandError
 
-from typing import Optional, Union, TYPE_CHECKING
+from typing import Collection, Iterable, List, Optional, Tuple, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from configfile import ConfigWrapper
@@ -94,6 +94,104 @@ class AFCMoveWarning(Enum):
     NONE = 0
     WARN = 1
     ERROR = 2
+
+def _filament_key(value: Optional[str]) -> str:
+    """
+    Normalizes a lane material or color so values entered by hand and values from Spoolman
+    compare equal regardless of case, surrounding whitespace or a leading `#`.
+
+    :param value: Material or color string, may be None
+    :return str: Normalized value, empty string when unset
+    """
+    return str(value or "").strip().lstrip("#").lower()
+
+def _tool_number(map_cmd: str) -> Optional[int]:
+    """
+    Returns the tool number of a `T<n>` mapping.
+
+    :param map_cmd: Lane mapping such as `T3`
+    :return Optional[int]: Tool number, or None for mappings that are not `T<n>`
+    """
+    if (map_cmd[:1].upper() == "T"
+        and map_cmd[1:].isdigit()):
+        return int(map_cmd[1:])
+    return None
+
+def material_confirmed(lane: AFCLane, default_material: Optional[str]) -> bool:
+    """
+    Whether a lane's material describes its spool. AFC labels a lane loaded
+    without spool data with `default_material_type`, so that value on a lane
+    with no spool id says nothing about the filament.
+
+    :param lane: Lane to check
+    :param default_material: AFC's `default_material_type`, None when unset
+    :return bool: False for a default label on a lane without a spool id
+    """
+    return not (default_material
+                and not lane.spool_id
+                and _filament_key(lane.material) == _filament_key(default_material))
+
+def select_runout_lane(empty_lane: AFCLane, lanes: Iterable[AFCLane], match_color: bool,
+                       referenced_tools: Optional[Collection[int]],
+                       default_material: Optional[str] = None
+                       ) -> Tuple[Optional[AFCLane], List[Tuple[str, str]]]:
+    """
+    Picks a compatible lane for infinite spool when a running out lane has no runout lane set.
+
+    A candidate must be loaded and ready, feed the same extruder, carry the same material
+    (and the same color when `match_color` is set), and must not be mapped to a tool the
+    current print uses. Lanes in the same unit win, then units and lanes in natural order.
+
+    :param empty_lane: Lane that is running out
+    :param lanes: Every lane AFC knows about
+    :param match_color: When True a candidate's color must match too
+    :param referenced_tools: Tool numbers the current print uses, None when unknown
+    :param default_material: AFC's `default_material_type`; a candidate carrying it without
+        a spool id is not trusted (see `material_confirmed`)
+    :return Tuple[Optional[AFCLane], List[Tuple[str, str]]]: Chosen lane or None, and
+        `(lane name, reason)` for every candidate that was rejected, in the order checked
+    """
+    material = _filament_key(empty_lane.material)
+    color = _filament_key(empty_lane.color)
+    rejected: List[Tuple[str, str]] = []
+
+    ordered = sorted(lanes, key=lambda lane: (lane.unit != empty_lane.unit,
+                                              natural_sort_key(lane.unit),
+                                              natural_sort_key(lane.name)))
+    for lane in ordered:
+        if lane is empty_lane:
+            continue
+        if not (lane.status == AFCLaneState.LOADED
+                and lane.prep_state
+                and lane.load_state):
+            rejected.append((lane.name, "not ready"))
+            continue
+        if lane.extruder_obj is not empty_lane.extruder_obj:
+            rejected.append((lane.name, f"feeds {lane.extruder_obj.name}"))
+            continue
+        if (not material
+            or _filament_key(lane.material) != material):
+            reason = f"material {lane.material!r} does not match {empty_lane.material!r}"
+            rejected.append((lane.name, reason))
+            continue
+        if not material_confirmed(lane, default_material):
+            reason = f"material {lane.material!r} is the default label, not spool data"
+            rejected.append((lane.name, reason))
+            continue
+        if (match_color
+            and (not color
+                 or _filament_key(lane.color) != color)):
+            reason = f"color {lane.color!r} does not match {empty_lane.color!r}"
+            rejected.append((lane.name, reason))
+            continue
+        if referenced_tools is not None:
+            used_tools = [cmd for cmd in lane.map if _tool_number(cmd) in referenced_tools]
+            if used_tools:
+                reason = f"mapped to {', '.join(used_tools)} used by this print"
+                rejected.append((lane.name, reason))
+                continue
+        return lane, rejected
+    return None, rejected
 
 class AFCLane:
     UPDATE_WEIGHT_DELAY = 10.0
@@ -1090,12 +1188,68 @@ class AFCLane:
         """
         self._afc_prep_done = True
 
-    def _perform_infinite_runout(self):
+    def _resolve_runout_lane(self) -> Optional[str]:
+        """
+        Returns the lane infinite spool switches to. An explicit `runout_lane` always wins; with
+        none set and `auto_runout_lane` enabled for this lane's unit, a compatible lane is picked
+        by `select_runout_lane`.
+
+        :return Optional[str]: Name of the lane to switch to, None to pause instead
+        """
+        if self.runout_lane is not None:
+            return self.runout_lane
+        if not self.unit_obj.auto_runout_lane:
+            return None
+        # Infinite spool unloads the lane in the toolhead; a spool pulled from any
+        # other lane must not swap the printing filament out.
+        if self.name != self.afc.current:
+            self.logger.info(f"{self.name} ran out but is not the lane in the toolhead, no "
+                             "runout lane chosen automatically")
+            return None
+        default_material = self.afc.default_material_type
+        if not material_confirmed(self, default_material):
+            self.logger.info(f"No runout lane set for {self.name} and its material "
+                             f"{self.material!r} is the default label, not spool data, so no "
+                             "lane is chosen automatically")
+            return None
+
+        metadata = self.afc.print_data_metadata
+        referenced_tools = metadata.referenced_tools if metadata is not None else None
+        match_color = self.unit_obj.auto_runout_match_color
+        chosen, rejected = select_runout_lane(self, self.afc.lanes.values(), match_color,
+                                              referenced_tools, default_material)
+        if chosen is None:
+            checked = ", ".join(f"{name} ({reason})" for name, reason in rejected)
+            self.logger.info(f"No runout lane set for {self.name} and no compatible lane found. "
+                             f"Checked: {checked or 'no other lanes'}")
+            return None
+
+        color = chosen.color or "none"
+        self.logger.info(f"No runout lane set for {self.name}, auto selected {chosen.name} "
+                         f"(material {chosen.material}, color {color}, unit {chosen.unit})")
+        if referenced_tools is None:
+            self.logger.warning("Tools used by this print are unknown, lanes mapped to other "
+                                "tools were not excluded")
+        return chosen.name
+
+    def _perform_runout(self) -> None:
+        """
+        Switches to the resolved runout lane, or pauses when there is none.
+        """
+        runout_lane = self._resolve_runout_lane()
+        if runout_lane is not None:
+            self._perform_infinite_runout(runout_lane)
+        else:
+            self._perform_pause_runout()
+
+    def _perform_infinite_runout(self, runout_lane: str) -> None:
         """
         Common function for infinite spool runout
             - Unloads current lane and loads the next lane as specified by runout variable.
             - Swaps mapping between current lane and runout lane so correct lane is loaded with T(n) macro
             - Once changeover is successful print is automatically resumed
+
+        :param runout_lane: Name of the lane to switch to
         """
         self.status = AFCLaneState.NONE
         self.logger.info("Infinite Spool triggered for {}".format(self.name))
@@ -1105,10 +1259,11 @@ class AFCLane:
             self.afc.error.AFC_error(f"Error when looking up current lane:{self.afc.current}")
             return
 
-        change_lane = self.afc.lanes.get(self.runout_lane)
+        change_lane = self.afc.lanes.get(runout_lane)
         # Verifying lanes are valid before continuing
         if not change_lane:
-            self.afc.error.AFC_error(f"Error when looking up runout lane:{self.runout_lane} for lane:{self.name}")
+            self.afc.error.AFC_error(f"Error when looking up runout lane:{runout_lane} "
+                                     f"for lane:{self.name}")
             return
 
         change_lane.status = AFCLaneState.INFINITE_RUNOUT
@@ -1158,10 +1313,7 @@ class AFCLane:
         if self.afc.error_state or not self.afc.function.is_printing():
             return
 
-        if self.runout_lane is not None:
-            self._perform_infinite_runout()
-        else:
-            self._perform_pause_runout()
+        self._perform_runout()
 
     def _perform_pause_runout(self):
         """
@@ -1300,11 +1452,7 @@ class AFCLane:
                     handle_runout = getattr(self.unit_obj, "handle_runout", None)
                     handled = handle_runout(self) if handle_runout else False
                     if not handled:
-                        # Checking to make sure runout_lane is set
-                        if self.runout_lane is not None:
-                            self._perform_infinite_runout()
-                        else:
-                            self._perform_pause_runout()
+                        self._perform_runout()
                 elif self.status != "calibrating":
                     self.set_unloaded()
 
@@ -1459,11 +1607,8 @@ class AFCLane:
                 # Don't run if user disabled sensor in gui
                 if not self.fila_prep.runout_helper.sensor_enabled:
                     self.logger.warning("Prep runout has been detected, but pause and runout detection has been disabled")
-                # Checking to make sure runout_lane is set
-                elif self.runout_lane is not None:
-                    self._perform_infinite_runout()
                 else:
-                    self._perform_pause_runout()
+                    self._perform_runout()
             elif not prep_state:
                 # Defer instead of acting while another lane's PREP cycle may still be
                 # driving a stepper, see _recheck_prep_runout().
@@ -1891,7 +2036,7 @@ class AFCLane:
                 # TODO: For now this only works for standalone toolheads, more reboust toolhead
                 # infinite runout can be added when resolving Issue #729. So for now if a toolhead
                 # runsout and its not a standalone lane AFC will pause.
-                self._perform_infinite_runout()
+                self._perform_infinite_runout(self.runout_lane)
                 # TODO: set tool unloaded here
             else:
                 self._perform_pause_runout()
