@@ -2531,12 +2531,12 @@ class afcACE(afcUnit):
         retract_dist = bowden
         try:
             self._wait_for_ace_ready()
-            # Clear the tip from the gears
-            self._stop_feed_assist(slot)
 
-            if (cur_extruder.tool_start == "buffer"
-                and not self._collapse_buffer(cur_lane, slot)):
-                return False
+            if cur_extruder.tool_start == "buffer":
+                # The buffer collapse drives the ACE with serial unwinds
+                self._stop_feed_assist(slot)
+                if not self._collapse_buffer(cur_lane, slot):
+                    return False
             if cur_extruder.tool_stn_unload > 0:
                 self._log_delta('ACE unload: retracting tool_stn_unload/2 (pre-unwind)')
                 afc.move_e_pos(cur_extruder.tool_stn_unload * -0.5, cur_extruder.tool_unload_speed,
@@ -2544,6 +2544,8 @@ class afcACE(afcUnit):
                 self._log_delta('ACE unload: retracting tool_stn_unload (overlaps unwind)')
                 afc.move_e_pos(cur_extruder.tool_stn_unload * -1, cur_extruder.tool_unload_speed,
                                "ACE STN unload", wait_tool=False)
+            # Unload assist runs through the retracts, a stopped ACE 2 holds the strand
+            self._stop_feed_assist(slot)
             self._wait_for_ace_ready()
             self._ace.unwind_filament(slot, retract_dist, self.retract_speed)
             self._wait_for_feed_complete(slot, retract_dist, self.retract_speed)

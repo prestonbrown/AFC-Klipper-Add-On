@@ -5,6 +5,7 @@ from __future__ import annotations
 import configparser
 import struct
 import sys
+import types
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import pytest
@@ -2947,6 +2948,80 @@ class TestAfcACE2UnloadRollbackAssist:
         unit._stop_feed_assist(0)
         assert [m for m in self._methods(unit) if m != "get_status"] == ["stop_feed_assist"]
         assert unit._rollback_assist_active == set()
+
+    @staticmethod
+    def _sequence(unit: afcACE2) -> List[Tuple[str, Any]]:
+        """
+        :param unit: the unit
+        :return list: its extruder moves and ACE commands in order, without status polls
+        """
+        return [(kind, args) for kind, args in unit.printer.timeline
+                if kind in ("move_e_pos", "send_command")
+                and args[0] != "get_status"]
+
+    def test_unload_retracts_under_rollback_assist_then_stops_it_for_the_unwind(self):
+        unit = self._unit()
+        lane = unit.lanes["lane1"]
+        lane.extruder_obj.tool_stn_unload = 100.0
+        unit.prepare_unload(lane, None, None)
+        unit.printer.timeline.clear()
+
+        assert unit._ace_unload_inner(lane, lane.extruder_obj) is True
+
+        assert self._sequence(unit) == [
+            ("move_e_pos", (-50.0, 25.0, "ACE STN unload", True)),
+            ("move_e_pos", (-100.0, 25.0, "ACE STN unload", False)),
+            ("send_command", ("stop_feed_assist", {"index": 0})),
+            ("send_command", ("unwind_filament", {"index": 0, "length": 900.0,
+                                                  "speed": 100.0, "mode": "normal"}))]
+        assert unit._rollback_assist_active == set()
+        assert unit.afc.error.handle_lane_failure.calls == []
+
+    def test_a_failed_retract_leaves_rollback_assist_for_finish_unload_to_stop(self):
+        unit = self._unit()
+        lane = unit.lanes["lane1"]
+        lane.extruder_obj.tool_stn_unload = 100.0
+        unit.prepare_unload(lane, None, None)
+
+        def jam(*args: Any, **kwargs: Any) -> None:
+            """The extruder move errors out."""
+            raise RuntimeError("move boom")
+        unit.afc.move_e_pos.func = jam
+
+        assert unit._ace_unload_inner(lane, lane.extruder_obj) is False
+        assert unit._rollback_assist_active == {0}
+
+        unit.finish_unload(lane)
+
+        assert unit._rollback_assist_active == set()
+        assert unit._operation_active is False
+        assert unit.afc.error.handle_lane_failure.calls == [
+            ((lane, "ACE unwind failed for lane1: move boom"), {"pause": False})]
+
+    def test_buffer_toolhead_stops_rollback_assist_before_the_collapse(self):
+        unit = self._unit()
+        lane = unit.lanes["lane1"]
+        lane.extruder_obj.tool_start = "buffer"
+        lane.extruder_obj.tool_stn_unload = 0
+        lane.buffer_obj = types.SimpleNamespace(trailing_state=False, advance_state=True)
+        unit.prepare_unload(lane, None, None)
+        unit.printer.timeline.clear()
+
+        def collapse(now: float) -> None:
+            """The buffer collapses after the first short unwind."""
+            lane.buffer_obj.trailing_state = True
+        unit.printer.reactor.on_pause = collapse
+
+        assert unit._ace_unload_inner(lane, lane.extruder_obj) is True
+
+        assert self._sequence(unit) == [
+            ("send_command", ("stop_feed_assist", {"index": 0})),
+            ("send_command", ("unwind_filament", {"index": 0, "length": 10.0,
+                                                  "speed": 100.0, "mode": "normal"})),
+            ("send_command", ("unwind_filament", {"index": 0, "length": 900.0,
+                                                  "speed": 100.0, "mode": "normal"}))]
+        assert unit._rollback_assist_active == set()
+        assert unit.afc.error.handle_lane_failure.calls == []
 
 
 class TestAfcACE2StartUnloadAssist:

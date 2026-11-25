@@ -4949,16 +4949,16 @@ class TestAfcACEAceUnloadInner:
         assert unit.afc.move_e_pos.calls == [
             ((-30.0, 25.0, "ACE STN unload"), {"wait_tool": True}),
             ((-60.0, 25.0, "ACE STN unload"), {"wait_tool": False})]
-        # The ready check and the assist stop come first, and both retracts are
-        # sent before the unwind (preceded by its own readiness check), so the
-        # async one overlaps it. The last three get_status are the unwind's
+        # Both retracts go out with assist still on, then the assist stop and the
+        # unwind (each preceded by a readiness check), so the async retract
+        # overlaps the unwind. The last three get_status are the unwind's
         # completion polls.
         assert unit.printer.timeline == [
             ("send_command", ("get_status", {})),
-            ("send_command", ("get_status", {})),
-            ("send_command", ("stop_feed_assist", {"index": 3})),
             ("move_e_pos", (-30.0, 25.0, "ACE STN unload", True)),
             ("move_e_pos", (-60.0, 25.0, "ACE STN unload", False)),
+            ("send_command", ("get_status", {})),
+            ("send_command", ("stop_feed_assist", {"index": 3})),
             ("send_command", ("get_status", {})),
             ("send_command", self.UNWIND),
             ("send_command", ("get_status", {})),
@@ -5112,6 +5112,37 @@ class TestAfcACEAceUnloadInner:
                     "may not be held by the extruder.\nCheck the toolhead, then run "
                     "TOOL_UNLOAD LANE=lane3 again. Raising tool_max_unload_attempts may "
                     "help.\nOnce cleared, click resume to continue printing"), {"pause": True})]
+
+    def test_after_prepare_unload_sends_no_assist_command(self):
+        unit, lane, wire = self._unit(feed_assist_active=[3])
+        lane.extruder_obj.tool_stn_unload = 60.0
+        unit.prepare_unload(lane, None, None)
+        unit._ace.commands.clear()
+
+        assert unit._ace_unload_inner(lane, lane.extruder_obj) is True
+
+        # The V1 has no reverse assist, so prepare_unload already left the slot stopped.
+        assert [m for m, _p in unit._ace.commands if m != "get_status"] == ["unwind_filament"]
+        assert unit._feed_assist_active == set()
+        assert unit.afc.error.handle_lane_failure.calls == []
+
+    def test_buffer_ramming_stops_assist_before_the_first_short_unwind(self):
+        unit, lane, wire = self._unit(feed_assist_active=[3])
+        lane.extruder_obj.tool_start = "buffer"
+        lane.extruder_obj.tool_stn_unload = 0
+        lane.buffer_obj = types.SimpleNamespace(trailing_state=False, advance_state=True)
+
+        def collapse(now: float) -> None:
+            """The buffer collapses after the first short unwind."""
+            lane.buffer_obj.trailing_state = True
+        unit.printer.reactor.on_pause = collapse
+
+        assert unit._ace_unload_inner(lane, lane.extruder_obj) is True
+
+        assert [m for m, _p in unit._ace.commands if m != "get_status"] == [
+            "stop_feed_assist", "unwind_filament", "unwind_filament"]
+        assert unit._feed_assist_active == set()
+        assert unit.afc.error.handle_lane_failure.calls == []
 
     def test_no_retract_move_when_tool_stn_unload_zero_but_still_unwinds(self):
         unit, lane, wire = self._unit()
