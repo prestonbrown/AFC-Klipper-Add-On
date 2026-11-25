@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11-24-2026]
+### Added
+- `LANE_UNLOAD LANE=<lane> FULL=1` on ACE units unwinds the strand past the unit's drive
+  gears so it can be pulled out by hand. A plain `LANE_UNLOAD` on an ACE 2 leaves the strand
+  gripped about 25 mm inside the unit. The full eject unwinds `dist_hub` plus the longer of
+  `stage_initial_dist` and `eject_buffer`, plus 50 mm, and does not auto-reload the lane.
+  Units without support refuse `FULL=1` with a warning.
+
 ## [11-15-2026]
 ### Added
 - Added support for Creality CFS (Creality Filament System) units with `[AFC_CFS]`: up to four boxes on one

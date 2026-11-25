@@ -1516,14 +1516,19 @@ class afc:
         This function handles the unloading of a specified lane from the extruder. It performs
         several checks and movements to ensure the lane is properly unloaded.
 
+        FULL=1 asks the unit to unwind the strand past its own drive gears so it can be
+        pulled out by hand, instead of leaving it gripped inside the unit. Only units that
+        support it accept FULL=1 (currently ACE); others refuse it with a warning.
+
         Usage
         -----
-        `LANE_UNLOAD LANE=<lane>`
+        `LANE_UNLOAD LANE=<lane> [FULL=<0 or 1>]`
 
         Example
         -----
         ```
         LANE_UNLOAD LANE=lane1
+        LANE_UNLOAD LANE=lane1 FULL=1
         ```
 
         """
@@ -1536,9 +1541,11 @@ class afc:
             self.logger.info('{} Unknown'.format(lane))
             return
         cur_lane = self.lanes[lane]
-        self.LANE_UNLOAD( cur_lane, gcmd )
+        full = gcmd.get_int('FULL', 0, minval=0, maxval=1) == 1
+        self.LANE_UNLOAD( cur_lane, gcmd, full=full )
 
-    def LANE_UNLOAD(self, cur_lane: AFCLane, gcmd: Optional[GCodeCommand]=None):
+    def LANE_UNLOAD(self, cur_lane: AFCLane, gcmd: Optional[GCodeCommand]=None,
+                    full: bool=False):
         """
         Ejects a lane's filament back out of the unit, when the lane is not in use.
 
@@ -1548,7 +1555,14 @@ class afc:
 
         :param cur_lane: AFCLane object for the lane to eject
         :param gcmd: command context to run the current-change macro through, if any
+        :param full: unwind the strand free of the unit (units with `supports_full_eject`)
         """
+        if (full
+            and not cur_lane.unit_obj.supports_full_eject):
+            self.logger.warning(f"LANE {cur_lane.name} not ejected: unit "
+                                f"{cur_lane.unit_obj.name} does not support FULL=1.")
+            return
+
         # TODO: update this to unload from toolhead and move all the way back to load
         # when homing is enabled
 
@@ -1565,7 +1579,10 @@ class afc:
             self.save_vars()
 
             # Calling unit specific eject function
-            cur_lane.unit_obj.eject_lane(cur_lane)
+            if full:
+                cur_lane.unit_obj.eject_lane(cur_lane, full=True)
+            else:
+                cur_lane.unit_obj.eject_lane(cur_lane)
 
             cur_lane.loaded_to_hub = False
             cur_lane.status = AFCLaneState.NONE

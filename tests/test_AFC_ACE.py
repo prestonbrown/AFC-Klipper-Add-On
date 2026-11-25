@@ -2217,6 +2217,31 @@ class TestAfcACEGetEjectLength:
         assert unit._get_eject_length(lane) == 1300.0
 
 
+class TestAfcACEGetFullEjectLength:
+    def test_staged_lane_adds_eject_buffer_and_margin(self):
+        unit = ace_p1_unit(LaneSpec("lane0", prep=True, load=True, values={"dist_hub": 300}))
+
+        # dist_hub 300 + the default eject_buffer 475 + the 50 mm margin.
+        assert unit._get_full_eject_length(unit.lanes["lane0"]) == 825.0
+
+    def test_tool_loaded_lane_starts_from_the_full_unload_path(self):
+        unit = ace_p1_unit(LaneSpec("lane0", prep=True, load=True, tool_loaded=True,
+                                    values={"dist_hub": 300}))
+        lane = unit.lanes["lane0"]
+        lane.hub_obj.afc_unload_bowden_length = 1000.0
+
+        # dist_hub 300 + bowden 1000 + eject_buffer 475 + margin 50.
+        assert unit._get_full_eject_length(lane) == 1825.0
+
+    def test_longer_stage_distance_wins_over_eject_buffer(self):
+        unit = ace_p1_unit(LaneSpec("lane0", prep=True, load=True, values={"dist_hub": 300}),
+                           values={"eject_buffer": 100.0})
+        unit.stage_initial_dist = 330.0
+
+        # dist_hub 300 + stage 330 + margin 50: the eject_buffer 100 is shorter.
+        assert unit._get_full_eject_length(unit.lanes["lane0"]) == 680.0
+
+
 class TestAfcACEUseFeedAssist:
     def test_per_lane_disabled_returns_false(self):
         unit = ace_p1_unit("lane0", current=None)
@@ -3368,6 +3393,40 @@ class TestAfcACEEjectLane:
         assert unit._operation_active is False
         assert unit._prev_states_stale is True
         assert unit.logger.messages == [self.UNWIND_LOG]
+
+    #: Full eject: dist_hub 100 + eject_buffer 475 (a V1 has no stage distance) + 50 margin.
+    FULL_UNWIND = ("unwind_filament", {"index": 3, "length": 625.0, "speed": 50.0,
+                                       "mode": "normal"})
+    FULL_LOGS = [("info", "ACE eject lane3: unwinding 625mm (dist_hub=100mm)"),
+                 ("info", "ACE eject lane3: filament is free of the unit, pull it out of "
+                          "the slot")]
+
+    def test_full_unwinds_past_the_unit_and_says_to_pull_it_out(self):
+        unit, lane, wire = self._unit()
+
+        unit.eject_lane(lane, full=True)
+
+        assert wire.moves() == [self.FULL_UNWIND]
+        assert lane.loaded_to_hub is False
+        assert unit._hub_load_suppressed == {"lane3"}
+        assert unit._operation_active is False
+        assert unit.logger.messages == self.FULL_LOGS
+
+    def test_full_failure_does_not_say_to_pull_it_out(self):
+        unit, lane, wire = self._unit()
+        wire.fail("unwind_filament", RuntimeError("bad"))
+
+        unit.eject_lane(lane, full=True)
+
+        assert lane.loaded_to_hub is True
+        assert unit._hub_load_suppressed == set()
+        assert unit.logger.messages == [self.FULL_LOGS[0],
+                                        ("error", "ACE eject failed for lane3: bad")]
+
+    def test_unit_supports_full_eject(self):
+        unit, _, _ = self._unit()
+
+        assert unit.supports_full_eject is True
 
 
 class TestAfcACELaneMove:

@@ -75,6 +75,9 @@ SENSOR_POLL_S = 0.02
 STOP_CONFIRM_TRIES = 3
 # Times a long load feed that ends in feed_error is resent for what it has left.
 LOAD_FEED_ERROR_RESENDS = 2
+# mm a full eject unwinds past the strand's in-unit length, so the tip clears the drive
+# gears even after some retract slip. Unwinding an empty slot is harmless.
+FULL_EJECT_MARGIN = 50.0
 
 def _ams_box_logo(title: str, n_slots: int, name: str) -> str:
     """
@@ -181,6 +184,7 @@ class afcACE(afcUnit):
     # this False since it reads them host-side (AFC_ACE2_rfid).
     _uses_firmware_rfid = True
     stage_initial_dist = 0.0
+    supports_full_eject = True
 
     def __init__(self, config: ConfigWrapper) -> None:
         """
@@ -1053,6 +1057,23 @@ class afcACE(afcUnit):
             return self._get_unload_length(cur_lane)
         return cur_lane.dist_hub + self.eject_buffer
 
+    def _get_full_eject_length(self, cur_lane: AFCLane) -> float:
+        """
+        Retract distance for a full eject (LANE_UNLOAD FULL=1): the path back to the unit,
+        then the strand's in-unit length plus FULL_EJECT_MARGIN, so it comes free of the
+        drive gears.
+
+        The in-unit length is the longer of `stage_initial_dist` (how far an ACE 2 stages
+        an insert) and `eject_buffer`; a V1 has no stage distance, so it uses
+        `eject_buffer`.
+
+        :param cur_lane: Lane to compute the full eject distance for.
+        :return float: Path to the unit plus the in-unit length plus the margin.
+        """
+        to_unit = (self._get_unload_length(cur_lane) if cur_lane.tool_loaded
+                   else cur_lane.dist_hub)
+        return to_unit + max(self.stage_initial_dist, self.eject_buffer) + FULL_EJECT_MARGIN
+
     def _use_feed_assist(self, cur_lane: AFCLane) -> bool:
         """
         Resolve whether feed assist should run for a lane.
@@ -1595,7 +1616,7 @@ class afcACE(afcUnit):
                     self.logger.error(f"ACE prep_post_load failed for {lane.name} after "
                                       f"{max_attempts} attempts: {e}")
 
-    def eject_lane(self, lane: AFCLane) -> None:
+    def eject_lane(self, lane: AFCLane, full: bool = False) -> None:
         """
         Retract filament back into the ACE unit.
 
@@ -1605,20 +1626,23 @@ class afcACE(afcUnit):
         toolhead) fall back to the full unload length (dist_hub + bowden).
 
         :param lane: Lane to eject/retract back into the unit.
+        :param full: Unwind past the unit's drive gears instead (see `_get_full_eject_length`)
+            so the strand can be pulled out by hand.
         """
         try:
-            self._eject_lane_inner(lane)
+            self._eject_lane_inner(lane, full)
         finally:
             # prepare_unload set _operation_active for an unload sequence that an
             # eject never runs, so clear it here or slot sync stays stopped.
             self._operation_active = False
             self._prev_states_stale = True
 
-    def _eject_lane_inner(self, lane: AFCLane) -> None:
+    def _eject_lane_inner(self, lane: AFCLane, full: bool) -> None:
         """
         eject_lane's body; see eject_lane.
 
         :param lane: Lane to eject/retract back into the unit.
+        :param full: Unwind the strand free of the unit's drive gears.
         """
         slot = self._get_slot(lane.name)
         if (self._ace
@@ -1630,7 +1654,8 @@ class afcACE(afcUnit):
                 try:
                     self._stop_feed_assist(slot)
                     self._wait_for_ace_ready()
-                    dist = self._get_eject_length(lane)
+                    dist = (self._get_full_eject_length(lane) if full
+                            else self._get_eject_length(lane))
                     self.logger.info(f"ACE eject {lane.name}: unwinding {dist:.0f}mm "
                                      f"(dist_hub={lane.dist_hub:.0f}mm)")
                     self._ace.unwind_filament(slot, dist, self.retract_speed)
@@ -1640,6 +1665,9 @@ class afcACE(afcUnit):
                     # Suppress the heartbeat's auto reload-to-hub until the spool
                     # is removed or explicitly loaded.
                     self._hub_load_suppressed.add(lane.name)
+                    if full:
+                        self.logger.info(f"ACE eject {lane.name}: filament is free of the "
+                                         f"unit, pull it out of the slot")
                 except Exception as e:
                     self.logger.error(f"ACE eject failed for {lane.name}: {e}")
 

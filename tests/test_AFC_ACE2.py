@@ -2919,6 +2919,64 @@ class TestAfcACE2UsesFirmwareRfid:
         assert unit.printer.logger.messages == []
 
 
+class TestAfcACE2FullEject:
+    """An ACE 2 stages an insert stage_initial_dist mm into the unit and its plain eject
+    stops 25 mm short of that, so the drive gears keep the strand; FULL=1 unwinds it free."""
+
+    @staticmethod
+    def _unit(**values: Any) -> afcACE2:
+        from tests.test_AFC_ACE import AceP1Wire
+        unit = make_ace2_unit(lanes=[LaneSpec("lane1", prep=True, load=True,
+                                              values={"dist_hub": 100})],
+                              values={"retract_speed": 50, **values})
+        # Report the unwind as moving, then done, as the unit does.
+        AceP1Wire(unit)
+        return unit
+
+    @staticmethod
+    def _unwinds(unit: afcACE2) -> List[Dict[str, Any]]:
+        return [params for method, params in unit._ace.commands
+                if method == "unwind_filament"]
+
+    def test_full_unwinds_dist_hub_stage_and_margin(self):
+        unit = self._unit()
+        lane = unit.lanes["lane1"]
+
+        unit.eject_lane(lane, full=True)
+
+        # dist_hub 100 + stage_initial_dist 330 + 50 mm margin.
+        assert [u["length"] for u in self._unwinds(unit)] == [480.0]
+        assert lane.loaded_to_hub is False
+        assert unit._hub_load_suppressed == {"lane1"}
+        assert unit.printer.logger.messages == [
+            ("info", "ACE eject lane1: unwinding 480mm (dist_hub=100mm)"),
+            ("info", "ACE eject lane1: filament is free of the unit, pull it out of the slot")]
+
+    def test_plain_eject_still_stops_inside_the_unit(self):
+        unit = self._unit()
+        lane = unit.lanes["lane1"]
+
+        unit.eject_lane(lane)
+
+        # dist_hub 100 + the derived eject_buffer 305 (stage_initial_dist - 25).
+        assert [u["length"] for u in self._unwinds(unit)] == [405.0]
+        assert lane.loaded_to_hub is False
+        assert unit._hub_load_suppressed == {"lane1"}
+        assert unit.printer.logger.messages == [
+            ("info", "ACE eject lane1: unwinding 405mm (dist_hub=100mm)")]
+
+    def test_full_uses_a_longer_eject_buffer_override(self):
+        unit = self._unit(eject_buffer=400.0)
+
+        unit.eject_lane(unit.lanes["lane1"], full=True)
+
+        # dist_hub 100 + eject_buffer 400 (longer than stage 330) + 50 mm margin.
+        assert [u["length"] for u in self._unwinds(unit)] == [550.0]
+
+    def test_unit_supports_full_eject(self):
+        assert self._unit().supports_full_eject is True
+
+
 class TestAfcACE2UnloadRollbackAssist:
     """A stopped ACE 2 holds the filament against the tip forming's retracts, so the
     unload runs rollback assist from its start until the unwind."""

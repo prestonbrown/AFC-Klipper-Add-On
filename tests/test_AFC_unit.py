@@ -104,6 +104,12 @@ class TestStr:
         assert str(unit) == "NightOwl_2"
 
 
+class TestSupportsFullEject:
+    def test_units_do_not_support_full_eject_by_default(self):
+        unit = _make_unit("Turtle_1")
+        assert unit.supports_full_eject is False
+
+
 # ── _check_and_errorout ────────────────────────────────────────────────────────
 
 class TestCheckAndErrorOut:

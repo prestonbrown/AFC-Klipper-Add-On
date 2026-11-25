@@ -5047,6 +5047,99 @@ class TestLaneUnload:
         obj.LANE_UNLOAD(cur_lane)
         assert seen == [State.EJECTING_LANE]
 
+    # ── full: FULL=1 eject ───────────────────────────────────────────────────
+
+    def test_full_passes_full_to_a_supporting_unit(self):
+        obj, cur_lane = _make_afc_for_lane_unload(lane_loaded="lane2", standalone=False)
+        cur_lane.unit_obj.supports_full_eject = True
+        obj.LANE_UNLOAD(cur_lane, full=True)
+        cur_lane.unit_obj.eject_lane.assert_called_once_with(cur_lane, full=True)
+        assert cur_lane.status == AFCLaneState.NONE
+        assert cur_lane.loaded_to_hub is False
+        obj.spool.set_spoolID.assert_called_once_with(cur_lane, None)
+        assert obj.logger.messages == [("info", "LANE lane1 eject done")]
+
+    def test_default_call_leaves_full_off_for_a_supporting_unit(self):
+        """Without full, the unit gets the plain eject_lane call, so units whose
+        eject_lane takes no `full` keyword keep working."""
+        obj, cur_lane = _make_afc_for_lane_unload(lane_loaded="lane2", standalone=False)
+        cur_lane.unit_obj.supports_full_eject = True
+        obj.LANE_UNLOAD(cur_lane)
+        cur_lane.unit_obj.eject_lane.assert_called_once_with(cur_lane)
+
+    def test_full_refused_by_a_unit_without_support(self):
+        obj, cur_lane = _make_afc_for_lane_unload(lane_loaded="lane2", standalone=False)
+        cur_lane.unit_obj.supports_full_eject = False
+        cur_lane.unit_obj.name = "Turtle_1"
+        obj.current_state = State.IDLE
+        obj.LANE_UNLOAD(cur_lane, full=True)
+        cur_lane.unit_obj.eject_lane.assert_not_called()
+        cur_lane.unit_obj.lane_unloading.assert_not_called()
+        assert cur_lane.status == AFCLaneState.LOADED
+        assert obj.current_state == State.IDLE
+        assert obj.logger.messages == [
+            ("warning", "LANE lane1 not ejected: unit Turtle_1 does not support FULL=1.")]
+
+    def test_unit_without_support_still_ejects_without_full(self):
+        """The refusal needs full as well as an unsupporting unit."""
+        obj, cur_lane = _make_afc_for_lane_unload(lane_loaded="lane2", standalone=False)
+        cur_lane.unit_obj.supports_full_eject = False
+        obj.LANE_UNLOAD(cur_lane)
+        cur_lane.unit_obj.eject_lane.assert_called_once_with(cur_lane)
+        assert obj.logger.messages == [("info", "LANE lane1 eject done")]
+
+
+class TestCmdLaneUnload:
+    @staticmethod
+    def _afc():
+        obj = _make_afc()
+        obj.function.is_printing.return_value = False
+        obj.error = MagicMock()
+        obj.LANE_UNLOAD = MagicMock()
+        cur_lane = MagicMock()
+        obj.lanes["lane1"] = cur_lane
+        return obj, cur_lane
+
+    def test_full_1_requests_a_full_eject(self):
+        obj, cur_lane = self._afc()
+        gcmd = _build_gcmd({"LANE": "lane1", "FULL": 1})
+        obj.cmd_LANE_UNLOAD(gcmd)
+        obj.LANE_UNLOAD.assert_called_once_with(cur_lane, gcmd, full=True)
+
+    def test_full_0_is_a_normal_eject(self):
+        obj, cur_lane = self._afc()
+        gcmd = _build_gcmd({"LANE": "lane1", "FULL": 0})
+        obj.cmd_LANE_UNLOAD(gcmd)
+        obj.LANE_UNLOAD.assert_called_once_with(cur_lane, gcmd, full=False)
+
+    def test_no_full_is_a_normal_eject(self):
+        obj, cur_lane = self._afc()
+        gcmd = _build_gcmd({"LANE": "lane1"})
+        obj.cmd_LANE_UNLOAD(gcmd)
+        obj.LANE_UNLOAD.assert_called_once_with(cur_lane, gcmd, full=False)
+
+    def test_full_out_of_range_is_rejected(self):
+        obj, _ = self._afc()
+        gcmd = _build_gcmd({"LANE": "lane1", "FULL": 2})
+        from tests.conftest import CommandError
+        with pytest.raises(CommandError):
+            obj.cmd_LANE_UNLOAD(gcmd)
+        obj.LANE_UNLOAD.assert_not_called()
+
+    def test_refused_while_printing(self):
+        obj, _ = self._afc()
+        obj.function.is_printing.return_value = True
+        obj.cmd_LANE_UNLOAD(_build_gcmd({"LANE": "lane1", "FULL": 1}))
+        obj.error.AFC_error.assert_called_once_with(
+            "Cannot eject lane while printer is printing", pause=False)
+        obj.LANE_UNLOAD.assert_not_called()
+
+    def test_unknown_lane_logged(self):
+        obj, _ = self._afc()
+        obj.cmd_LANE_UNLOAD(_build_gcmd({"LANE": "nope", "FULL": 1}))
+        obj.LANE_UNLOAD.assert_not_called()
+        assert obj.logger.messages == [("info", "nope Unknown")]
+
 
 # ── save_vars / background var-file writer ─────────────────────────────────────
 

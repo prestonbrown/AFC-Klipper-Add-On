@@ -46,6 +46,8 @@ SENSORLESS_UNITS = ["OpenAMS"]
 class afcUnit:
     HOMING_DELTA = 300  # Delta for which to warn if homing move delta is not within this amount from
                         # command move distance.
+    # True when eject_lane takes `full=True` (LANE_UNLOAD FULL=1) to release the strand.
+    supports_full_eject: bool = False
     def __init__(self, config: ConfigWrapper) -> None:
         self.printer        = config.get_printer()
         self.gcode          = self.printer.load_object(config, 'gcode')
