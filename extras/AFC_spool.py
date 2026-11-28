@@ -902,7 +902,12 @@ class AFCSpool:
                         error_str = (f"Invalid weight for spoolID: {SpoolID}. "
                                     "Please check remaining weight before assigning.")
                         self.afc.error.AFC_error(error_str, False, gcmd="callback")
+                        edited_filament_id = cur_lane.filament_id
                         self.clear_values(cur_lane)
+                        # A FILAMENT_ID set after the lookup was sent outlives the bad spool
+                        if id_edited:
+                            cur_lane.filament_id = edited_filament_id
+                            cur_lane.send_lane_data()
                         return
 
                 # A multi-color filament keeps every color; the lane's color is the first one.

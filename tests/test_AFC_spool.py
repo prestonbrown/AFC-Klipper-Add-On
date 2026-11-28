@@ -1995,6 +1995,37 @@ class TestSetSpoolID:
         callbacks[0](_make_spool_result())
         assert lane.filament_id == ""
 
+    def test_filament_id_set_while_lookup_pending_survives_an_invalid_weight(self):
+        spool, lane = self._filament_id_lane(4)
+        spool.afc.lanes = {"lane1": lane}
+        spool.afc.save_vars = MagicMock()
+        callbacks = self._pending_lookup(spool)
+        spool.set_spoolID(lane, 5, gcmd=_make_gcmd())
+        spool.cmd_SET_FILAMENT_INFO(_make_gcmd(LANE="lane1", FILAMENT_ID="custom-preset"))
+        lane.send_lane_data.reset_mock()
+        callbacks[0](_make_spool_result(weight=0.0))
+        assert lane.spool_id is None
+        assert lane.material == ""
+        assert lane.filament_id == "custom-preset"
+        lane.clear_lane_data.assert_called_once_with()
+        lane.send_lane_data.assert_called_once_with()
+        spool.afc.error.AFC_error.assert_called_once_with(
+            "Invalid weight for spoolID: 5. Please check remaining weight before assigning.",
+            False, gcmd="callback")
+        assert spool.logger.messages == [("debug", "Weight remaining for SpoolID 5: 0.0")]
+
+    def test_invalid_weight_without_an_edit_clears_filament_id(self):
+        spool, lane = self._filament_id_lane(4)
+        spool.afc.save_vars = MagicMock()
+        callbacks = self._pending_lookup(spool)
+        spool.set_spoolID(lane, 5, gcmd=_make_gcmd())
+        callbacks[0](_make_spool_result(weight=0.0))
+        assert lane.spool_id is None
+        assert lane.filament_id == ""
+        lane.clear_lane_data.assert_called_once_with()
+        lane.send_lane_data.assert_not_called()
+        assert spool.logger.messages == [("debug", "Weight remaining for SpoolID 5: 0.0")]
+
     def test_valid_spool_id_lane_not_loaded_lane_in_unit(self):
         gcmd = _make_gcmd()
         spool = self._make_spool_with_spoolman()
