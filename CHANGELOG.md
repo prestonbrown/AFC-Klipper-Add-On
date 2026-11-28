@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Installer now support EMU-C boards.
 
+### Fixed
+- A Spoolman spool rejected for its remaining weight no longer erases a `FILAMENT_ID` set with
+  `SET_FILAMENT_INFO` while its lookup was pending.
+- Clearing or ejecting a lane drops its pending Spoolman lookup, so the lookup cannot put the old
+  spool and its `filament_id` back on the lane.
+
 ## [11-26-2026]
 ### Added
 - Added Creality CFS to the installer. Additional CFS units join the first box's chain: the installer
