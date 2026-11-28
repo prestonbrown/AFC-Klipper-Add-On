@@ -154,6 +154,11 @@ class TestAFCSpoolInit:
         spool = AFCSpool(config)
         assert spool._filament_id_edits == {}
 
+    def test_lane_resets_start_empty(self):
+        config, _ = self._make_config()
+        spool = AFCSpool(config)
+        assert spool._lane_resets == {}
+
     def test_registers_klippy_connect_handler_to_handle_connect(self):
         config, printer = self._make_config()
         spool = AFCSpool(config)
@@ -1616,6 +1621,35 @@ class TestClearValues:
         spool.clear_values(lane)
         assert lane.filament_id == ""
 
+    def test_cancels_pending_lookups(self):
+        spool = _make_spool()
+        lane = _make_lane()
+        spool.clear_values(lane)
+        assert spool._lane_resets == {"lane1": 1}
+
+    def test_cancel_lookups_false_keeps_pending_lookups(self):
+        spool = _make_spool()
+        lane = _make_lane()
+        lane.filament_id = "OFDSrzZ8"
+        spool.clear_values(lane, cancel_lookups=False)
+        assert lane.filament_id == ""
+        assert spool._lane_resets == {}
+
+
+class TestCancelSpoolLookups:
+    def test_first_cancel_counts_one(self):
+        spool = _make_spool()
+        spool.cancel_spool_lookups(_make_lane("lane2"))
+        assert spool._lane_resets == {"lane2": 1}
+
+    def test_counts_each_cancel_per_lane(self):
+        spool = _make_spool()
+        lane1, lane2 = _make_lane("lane1"), _make_lane("lane2")
+        spool.cancel_spool_lookups(lane1)
+        spool.cancel_spool_lookups(lane1)
+        spool.cancel_spool_lookups(lane2)
+        assert spool._lane_resets == {"lane1": 2, "lane2": 1}
+
 
 class TestGetSpoolmanExtra:
     def test_json_string_is_decoded(self):
@@ -2025,6 +2059,86 @@ class TestSetSpoolID:
         lane.clear_lane_data.assert_called_once_with()
         lane.send_lane_data.assert_not_called()
         assert spool.logger.messages == [("debug", "Weight remaining for SpoolID 5: 0.0")]
+
+    def test_invalid_weight_leaves_a_newer_lookup_pending(self):
+        spool, lane = self._filament_id_lane(None, filament_id="")
+        spool.afc.save_vars = MagicMock()
+        callbacks = self._pending_lookup(spool)
+        spool.set_spoolID(lane, 5, gcmd=_make_gcmd())
+        spool.set_spoolID(lane, 6, gcmd=_make_gcmd())
+        callbacks[0](_make_spool_result(weight=0.0))
+        result = _make_spool_result(material="PETG")
+        result["filament"]["extra"] = {"orca_filament_id": '"OFHmPYRy"'}
+        callbacks[1](result)
+        assert lane.spool_id == 6
+        assert lane.material == "PETG"
+        assert lane.filament_id == "OFHmPYRy"
+        assert spool.logger.messages == [("debug", "Weight remaining for SpoolID 5: 0.0"),
+                                         ("debug", "Weight remaining for SpoolID 6: 800.0")]
+
+    def _reset_while_pending(self, reset):
+        spool, lane = self._filament_id_lane(4)
+        lane.material = "ABS"
+        spool.afc.save_vars = MagicMock()
+        on_done = MagicMock()
+        callbacks = self._pending_lookup(spool)
+        spool.set_spoolID(lane, 5, on_done=on_done, gcmd=_make_gcmd())
+        reset(spool, lane)
+        result = _make_spool_result()
+        result["filament"]["extra"] = {"orca_filament_id": '"OFHmPYRy"'}
+        callbacks[0](result)
+        return spool, lane, on_done
+
+    def test_clear_values_while_pending_drops_the_lookup(self):
+        spool, lane, on_done = self._reset_while_pending(
+            lambda spool, lane: spool.clear_values(lane))
+        assert lane.spool_id is None
+        assert lane.material == ""
+        assert lane.filament_id == ""
+        lane.send_lane_data.assert_not_called()
+        spool.afc.save_vars.assert_called_once_with()
+        on_done.assert_called_once_with()
+        assert spool.logger.messages == [
+            ("debug", "Ignoring Spoolman data for SpoolID 5, lane1 was reset after the lookup "
+                      "was sent")]
+
+    def test_cancel_while_pending_drops_the_lookup(self):
+        spool, lane, on_done = self._reset_while_pending(
+            lambda spool, lane: spool.cancel_spool_lookups(lane))
+        assert lane.spool_id == 4
+        assert lane.material == "ABS"
+        assert lane.filament_id == "OFDSrzZ8"
+        on_done.assert_called_once_with()
+        assert spool.logger.messages == [
+            ("debug", "Ignoring Spoolman data for SpoolID 5, lane1 was reset after the lookup "
+                      "was sent")]
+
+    def test_clear_values_keeping_lookups_lets_the_lookup_apply(self):
+        spool, lane, on_done = self._reset_while_pending(
+            lambda spool, lane: spool.clear_values(lane, cancel_lookups=False))
+        assert lane.spool_id == 5
+        assert lane.material == "PLA"
+        assert lane.filament_id == "OFHmPYRy"
+        lane.send_lane_data.assert_called_once_with()
+        on_done.assert_called_once_with()
+        assert spool.logger.messages == [("debug", "Weight remaining for SpoolID 5: 800.0")]
+
+    def test_reset_of_another_lane_does_not_drop_the_lookup(self):
+        spool, lane, on_done = self._reset_while_pending(
+            lambda spool, lane: spool.cancel_spool_lookups(_make_lane("lane2")))
+        assert lane.spool_id == 5
+        assert lane.filament_id == "OFHmPYRy"
+        assert spool.logger.messages == [("debug", "Weight remaining for SpoolID 5: 800.0")]
+
+    def test_reset_before_the_lookup_is_sent_still_applies(self):
+        spool, lane = self._filament_id_lane(None, filament_id="")
+        spool.afc.save_vars = MagicMock()
+        spool.cancel_spool_lookups(lane)
+        callbacks = self._pending_lookup(spool)
+        spool.set_spoolID(lane, 5, gcmd=_make_gcmd())
+        callbacks[0](_make_spool_result())
+        assert lane.spool_id == 5
+        assert spool.logger.messages == [("debug", "Weight remaining for SpoolID 5: 800.0")]
 
     def test_valid_spool_id_lane_not_loaded_lane_in_unit(self):
         gcmd = _make_gcmd()

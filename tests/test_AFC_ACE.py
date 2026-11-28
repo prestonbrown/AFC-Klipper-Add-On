@@ -2394,12 +2394,12 @@ class TestAfcACEOnFilamentInsert:
         lane.spool_id = 5
         lane.remember_spool = True
         # AFC's clear_values drops the lane's spool id.
-        unit.afc.spool.clear_values = Hook(lambda cleared: setattr(cleared, "spool_id", None))
+        unit.afc.spool.clear_values = Hook(lambda cleared, **_: setattr(cleared, "spool_id", None))
         wire = AceP1Wire(unit)
 
         unit.on_filament_insert(lane, gcmd="callback")
 
-        assert unit.afc.spool.clear_values.calls == [((lane,), {})]
+        assert unit.afc.spool.clear_values.calls == [((lane,), {"cancel_lookups": False})]
         assert unit.afc.spool.set_spoolID.calls == [((lane, 5), {"gcmd": "callback"})]
         # The restore branch fired, so the no-identity default-values branch must not.
         assert unit.afc.spool._set_values.calls == []
@@ -2422,7 +2422,7 @@ class TestAfcACEOnFilamentInsert:
         lane = unit.lanes["lane0"]
         lane.spool_id = 5
         lane.remember_spool = False
-        unit.afc.spool.clear_values = Hook(lambda cleared: setattr(cleared, "spool_id", None))
+        unit.afc.spool.clear_values = Hook(lambda cleared, **_: setattr(cleared, "spool_id", None))
         # _set_values only fires for V1 alongside applying RFID tag defaults.
         monkeypatch.setattr(afc_ace_module, "apply_filament_defaults", Recorder())
 
@@ -2439,7 +2439,7 @@ class TestAfcACEOnFilamentInsert:
         lane.spool_id = 5
         lane.remember_spool = False
         lane._afc_staged_spool_id = 5
-        unit.afc.spool.clear_values = Hook(lambda cleared: setattr(cleared, "spool_id", None))
+        unit.afc.spool.clear_values = Hook(lambda cleared, **_: setattr(cleared, "spool_id", None))
 
         unit.on_filament_insert(lane, gcmd="callback")
 
@@ -2477,7 +2477,7 @@ class TestAfcACEOnFilamentInsert:
         unit.on_filament_insert(lane, gcmd="callback")
 
         # The default clear_values leaves spool_id set.
-        assert unit.afc.spool.clear_values.calls == [((lane,), {})]
+        assert unit.afc.spool.clear_values.calls == [((lane,), {"cancel_lookups": False})]
         assert unit.afc.spool.set_spoolID.calls == []
         assert unit.afc.spool._set_values.calls == [((lane,), {"gcmd": "callback"})]
         assert lane.spool_id == 5

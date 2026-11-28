@@ -43,6 +43,8 @@ class AFCSpool:
         # Per lane count of SET_FILAMENT_INFO FILAMENT_ID= edits, so a pending Spoolman
         # lookup can tell the id was set after it was sent
         self._filament_id_edits: dict[str, int] = {}
+        # Per lane count of spool data resets, so a lookup sent before one is dropped
+        self._lane_resets: dict[str, int] = {}
 
     def register_commands(self, afc: afc) -> None:
         """
@@ -764,9 +766,12 @@ class AFCSpool:
         elif on_done is not None:
             on_done()
 
-    def clear_values(self, cur_lane: AFCLane) -> None:
+    def clear_values(self, cur_lane: AFCLane, *, cancel_lookups: bool = True) -> None:
         """
         Helper function for clearing out lane spool values
+
+        :param cur_lane:       AFC lane to clear
+        :param cancel_lookups: Whether a Spoolman lookup still pending for the lane is dropped
         """
         cur_lane.spool_id = None
         cur_lane.material = ''
@@ -781,6 +786,17 @@ class AFCSpool:
         cur_lane.spool_vendor = ""
         cur_lane.filament_name = ""
         cur_lane.filament_id = ""
+        if cancel_lookups:
+            self.cancel_spool_lookups(cur_lane)
+
+    def cancel_spool_lookups(self, cur_lane: AFCLane) -> None:
+        """
+        Drops every Spoolman lookup still pending for a lane, so a lookup sent before the
+        lane's spool data was reset cannot put the old spool back.
+
+        :param cur_lane: AFC lane whose pending lookups are dropped
+        """
+        self._lane_resets[cur_lane.name] = self._lane_resets.get(cur_lane.name, 0) + 1
 
     def set_spoolID(self, cur_lane: AFCLane, SpoolID: Optional[Union[int, str]],
                     save_vars: bool = True, on_done: Optional[Callable[[], None]] = None, *,
@@ -814,10 +830,12 @@ class AFCSpool:
                         False, gcmd=gcmd)
                 else:
                     edits = self._filament_id_edits.get(cur_lane.name, 0)
+                    resets = self._lane_resets.get(cur_lane.name, 0)
                     self.afc.moonraker.get_spool(
                         spool_id_int,
                         lambda result: self._apply_spool_data(cur_lane, spool_id_value, result,
-                                                              save_vars, on_done, edits))
+                                                              save_vars, on_done, edits,
+                                                              resets))
                     return
             elif not cur_lane.remember_spool:
                 self.clear_values(cur_lane)
@@ -836,7 +854,7 @@ class AFCSpool:
     def _apply_spool_data(self, cur_lane: AFCLane, SpoolID: Union[int, str],
                           result: Optional[dict], save_vars: bool,
                           on_done: Optional[Callable[[], None]] = None,
-                          filament_id_edits: int = 0) -> None:
+                          filament_id_edits: int = 0, lane_resets: int = 0) -> None:
         """
         Applies a Spoolman spool lookup result to a lane: material, color,
         weight, temperatures, etc. Runs as the completion callback for
@@ -844,7 +862,7 @@ class AFCSpool:
 
         A different spool clears the lane's slicer filament id, which named the old
         spool's filament, unless `SET_FILAMENT_INFO FILAMENT_ID=` set one after the lookup
-        was sent.
+        was sent. A lookup sent before the lane's spool data was reset applies nothing.
 
         :param cur_lane:  AFC lane to assign the spool to
         :param SpoolID:   Spoolman spool ID that was queried
@@ -853,11 +871,17 @@ class AFCSpool:
         :param on_done:   Called once this attempt to apply spool data is finished,
                           on every exit path (success, invalid weight, or error)
         :param filament_id_edits: The lane's filament id edit count when the lookup was sent
+        :param lane_resets: The lane's spool data reset count when the lookup was sent
         """
         try:
             try:
                 if result is None:
                     raise ValueError(f"No spool data returned for SpoolID {SpoolID}")
+
+                if self._lane_resets.get(cur_lane.name, 0) != lane_resets:
+                    self.afc.logger.debug(f"Ignoring Spoolman data for SpoolID {SpoolID}, "
+                                          f"{cur_lane.name} was reset after the lookup was sent")
+                    return
 
                 id_edited = self._filament_id_edits.get(cur_lane.name, 0) != filament_id_edits
                 if (not id_edited
@@ -903,7 +927,8 @@ class AFCSpool:
                                     "Please check remaining weight before assigning.")
                         self.afc.error.AFC_error(error_str, False, gcmd="callback")
                         edited_filament_id = cur_lane.filament_id
-                        self.clear_values(cur_lane)
+                        # A newer lookup for the lane may still be pending and should apply
+                        self.clear_values(cur_lane, cancel_lookups=False)
                         # A FILAMENT_ID set after the lookup was sent outlives the bad spool
                         if id_edited:
                             cur_lane.filament_id = edited_filament_id

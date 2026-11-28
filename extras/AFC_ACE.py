@@ -1195,7 +1195,8 @@ class afcACE(afcUnit):
         # spool; the staged id lets a fresh scan survive remember_spool off.
         staged_spool_id = getattr(lane, '_afc_staged_spool_id', None)
         lane._afc_staged_spool_id = None
-        self.afc.spool.clear_values(lane)
+        # set_loaded() just sent the lookup for a staged spool; it must still apply
+        self.afc.spool.clear_values(lane, cancel_lookups=False)
         # V1 ACE identifies the spool through the firmware here; the ACE 2 reads
         # the tag host-side (AFC_ACE2_rfid) on the post_insert event instead.
         if self._uses_firmware_rfid:

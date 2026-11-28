@@ -5170,6 +5170,12 @@ class TestClearLaneInfo:
         lane.send_lane_data.side_effect = Exception("boom")
         ams._clear_lane_info(lane, gcmd="callback")  # must not raise
 
+    def test_cancels_pending_spool_lookups(self):
+        ams, afc, printer, reactor = _make_ams()
+        lane = _make_lane("lane1", spool_id=None)
+        ams._clear_lane_info(lane, gcmd="callback")
+        afc.spool.cancel_spool_lookups.assert_called_once_with(lane)
+
 
 class TestCancelAndMarkLoaded:
     def test_idle_immediately_sets_current_spool(self):
